@@ -1,0 +1,19 @@
+[Unit]
+After=network.target
+
+[Service]
+User=purchase-order
+Group=purchase-order
+EnvironmentFile=/etc/rd-api-key
+EnvironmentFile=/etc/hd-api-key
+WorkingDirectory=/opt/bridge
+ExecStart=/usr/bin/gunicorn -c conf.py -b 127.0.0.1:3002 server:app
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+TimeoutStopSec=5
+PrivateTmp=true
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

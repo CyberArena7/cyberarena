@@ -1,0 +1,13 @@
+[project]
+name = "ticket-to-excel"
+version = "0.1.0"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["openpyxl>=3.1.5", "repairdesk"]
+
+[tool.uv.sources]
+repairdesk = { path = "../repairdesk" }
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"

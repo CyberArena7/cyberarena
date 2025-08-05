@@ -1,0 +1,18 @@
+[project]
+name = "bridge"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["flask>=3.1.1", "holded", "repairdesk"]
+
+[tool.uv.sources]
+repairdesk = { path = "../repairdesk" }
+holded = { path = "../holded" }
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+
+[dependency-groups]
+dev = ["gunicorn>=23.0.0"]

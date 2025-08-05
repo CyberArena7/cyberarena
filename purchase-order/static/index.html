@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<head>
+  <title>Purchase Order</title>
+  <link href="/static/styles.css" rel="stylesheet" />
+</head>
+<body>
+  <h1>Conversor facturas a RepairDesk</h1>
+  <form method="post" action="/upload" enctype="multipart/form-data">
+    <div>
+      <label for="invoice">Archivo: </label>
+      <input type="file" name="invoice" required />
+    </div>
+    <div>
+      <input type="submit" value="Enviar" />
+    </div>
+  </form>
+</body>

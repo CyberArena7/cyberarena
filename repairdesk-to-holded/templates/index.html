@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Repairdesk ➡️ Holded Bridge</title>
+    <link href="/static/styles.css" rel="stylesheet" />
+    <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.6/dist/htmx.js" integrity="sha384-ksKjJrwjL5VxqAkAZAVOPXvMkwAykMaNYegdixAESVr+KqLkKE8XBDoZuwyWVUDv" crossorigin="anonymous"></script>
+</head>
+<body>
+    <header>
+        <h1>Repairdesk to Holded Bridge v0</h1>
+    </header>
+    <main>
+        <div class="container">
+            <h2>Status</h2>
+            <div id="status" hx-get="/status" hx-trigger="load, every 1s">Loading bridge status...</div>
+        </div>
+        <div class="container">
+            <h2>Logs</h2>
+            <form>
+                <button>Clear logs</button>
+            </form>
+            <div id="logs" hx-get="/logs" hx-trigger="load, every 20s">Loading logs...</div>
+        </div>
+    </main>
+</body>
+</html>
