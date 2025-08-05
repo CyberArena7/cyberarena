@@ -1,4 +1,5 @@
-from flask import Flask, request, make_response
+from dataclasses import dataclass
+from flask import Flask, render_template, request, make_response
 from datetime import datetime
 import xlwt
 import io
@@ -23,12 +24,13 @@ def upload_invoice():
     data = request.files["invoice"].read()
     invoice = providers.parse(data)
 
-    output = io.BytesIO()
     workbook = xlwt.Workbook()
     ws = workbook.add_sheet("Sheet1")
 
     for i, col in enumerate(["Sku/Upc/Id", "Description", "Qty", "Price"]):
         ws.write(0, i, col)
+
+    missing_items = []
 
     for i, item in enumerate(invoice.items):
         try:
@@ -37,7 +39,8 @@ def upload_invoice():
             else:
                 match = api.search_item(item.name)
         except ItemNotFound:
-            return "NO SE HA ENCONTRADO EL ITEM: {}  SKU: {}".format(item.name, item.id)
+            missing_items.append(item)
+            continue
 
         print(match.name, "-", match.sku)
 
@@ -54,14 +57,18 @@ def upload_invoice():
         for i, value in enumerate(["339584223", "", 1, invoice.shipping.price]):
             ws.write(len(invoice.items) + 1, i, value)
 
-    workbook.save(output)
+    if len(missing_items) == 0:
+        output = io.BytesIO()
+        workbook.save(output)
 
-    res = make_response(output.getvalue())
-    res.headers["Content-Disposition"] = "attachment; filename={}-{}.xls".format(
-        invoice.provider.name, datetime.today().strftime("%d-%m")
-    )
-    res.headers["Content-type"] = "application/vnd.ms-excel"
-    return res
+        res = make_response(output.getvalue())
+        res.headers["Content-Disposition"] = "attachment; filename={}-{}.xls".format(
+            invoice.provider.name, datetime.today().strftime("%d-%m")
+        )
+        res.headers["Content-type"] = "application/vnd.ms-excel"
+        return res
+    else:
+        return render_template("upload.html", items=missing_items)
 
 
 if __name__ == "__main__":

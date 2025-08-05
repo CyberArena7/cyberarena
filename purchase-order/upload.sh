@@ -3,7 +3,7 @@
 mkdir -p dist
 
 echo "Creando tarball"
-tar cf dist/purchase-order.tar main.py providers static
+tar cf dist/purchase-order.tar main.py providers static templates
 
 echo "Copiando archivos"
 scp dist/purchase-order.tar purchase-order.service "$1:/tmp"
