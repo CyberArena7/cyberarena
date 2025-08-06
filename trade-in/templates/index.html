@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<head>
+  <meta charset="UTF-8">
+  <title>Libro policía</title>
+</head>
+<body>
+  <form method="post" enctype="multipart/form-data">
+    <div>
+      <label for="export">Archivo: </label>
+      <input type="file" name="export" required />
+    </div>
+    <div>
+      <input type="submit" formaction="/digital" value="Digital" />
+      <input type="submit" formaction="/physical" value="Físico" />
+    </div>
+  </form>
+</body>
