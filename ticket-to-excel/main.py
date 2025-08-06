@@ -4,8 +4,9 @@ import repairdesk
 from openpyxl import Workbook, load_workbook
 from time import sleep
 import re
+import os
 
-api = repairdesk.RepairDesk("y2vd9Fq-FIHa-J0uC-nZrO-KwA2l1ftL")
+api = repairdesk.RepairDesk(os.environ["API_KEY"])
 
 
 def sheet_to_dict_array(sheet):
