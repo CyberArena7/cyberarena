@@ -30,47 +30,73 @@ def main():
     assert ws is not None
 
     ws.append(
-        ["N Ticket", "Fecha", "Dispositivo", "Estado", "Técnico", "Partes", "Pagado", "Estimado"]
+        [
+            "N Ticket",
+            "Fecha",
+            "Dispositivo",
+            "Estado",
+            "Partes",
+            "Precio partes",
+            "Pagado",
+            "Total",
+        ]
     )
 
-    for line in data:
-        # number = input("Ticket number: ")
-        # if number == "":
-        #     break
+    last_id = int(data[0]["Ticket ID"].lstrip("T-")) + 1
+    for row in data:
+        id = row["Ticket ID"]
 
-        id = line["Ticket ID"]
+        for number in range(last_id - 1, int(id.lstrip("T-")), -1):
+            ws.append(
+                [
+                    "T-{}".format(number),
+                    "MISSING",
+                    "MISSING",
+                    "MISSING",
+                    "MISSING",
+                    "MISSING",
+                ]
+            )
 
-        ticket_id = api._call("/tickets", params={"keyword": id})["data"]["ticketData"][0][
+        last_id = int(id.lstrip("T-"))
+
+        internal_id = api._call("/tickets", params={"keyword": id})["data"]["ticketData"][0][
             "summary"
         ]["id"]
-        ticket = api._call("/tickets/{}".format(ticket_id), params={})["data"]
+        ticket = api._call("/tickets/{}".format(internal_id), params={})["data"]
         device = ticket["devices"][0]
 
-        if device["deviceCategoryName"] != "PATINES":
-            print(
-                "Skipping:",
-                line["Ticket ID"],
-                line["Device Manufacturer"],
-                line["Devices Category"],
-            )
-            continue
-
         name = device["name_with_device_and_manufacturer"]
-
         status = device["status"]["name"]
 
         created = datetime.fromtimestamp(ticket["summary"]["created_date"])
 
-        tech = 0
-        parts = 0
+        total_parts = 0
         for part in device["parts"]:
-            if part["name"] == "Reparación Nivel 4" or part["name"] == "Reparacióin Nivel 4":
-                tech += 25 * int(part["quantity"])
-            else:
-                parts += float(part["price"]) * int(part["quantity"])
+            total_parts += float(part["price"]) * int(part["quantity"])
 
-        print(id, name, status, tech, parts, line["Paid"], line["Total"])
-        ws.append([id, created, name, status, tech, parts, line["Paid"], line["Total"]])
+        print(
+            id,
+            created,
+            name,
+            status,
+            row["Ticket Items"],
+            total_parts,
+            row["Paid"],
+            row["Total"],
+        )
+        ws.append(
+            [
+                id,
+                created,
+                name,
+                status,
+                row["Ticket Items"],
+                total_parts,
+                row["Paid"],
+                row["Total"],
+            ]
+        )
         wb.save("output.xlsx")
 
 
