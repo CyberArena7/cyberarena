@@ -46,7 +46,7 @@ def upload_invoice():
         else:
             real_price = item.price * VAT_MULT
 
-        for j, value in enumerate([match.id, "", item.amount, real_price]):
+        for j, value in enumerate([match.sku, "", item.amount, real_price]):
             ws.write(i + 1, j, value)
 
     # Add shipping as a separate item because it cannot be included properly in the Excel
