@@ -59,11 +59,18 @@ class Store:
 
 
 @dataclass
+class BasicCustomer:
+    id: str
+    name: str
+
+
+@dataclass
 class BasicInvoice:
     id: str
     order_id: str
     date: datetime
     status: str
+    customer: BasicCustomer
 
 
 @dataclass
@@ -133,7 +140,7 @@ class RepairDesk:
         to_date: datetime | None = None,
         status: str | None = None,
         keyword: str | None = None,
-    ) -> list[Invoice]:
+    ) -> list[BasicInvoice]:
         if from_date is not None:
             from_date = int(from_date.timestamp())
         if to_date is not None:
@@ -158,11 +165,16 @@ class RepairDesk:
                         order_id=invoice["summary"]["order_id"],
                         date=datetime.fromtimestamp(invoice["summary"]["created_date"]),
                         status=invoice["summary"]["status"],
+                        customer=BasicCustomer(
+                            id=invoice["summary"]["customer"]["id"],
+                            name=invoice["summary"]["customer"]["fullName"],
+                        ),
                     )
                 )
             return invoices
         except:
             print("ERROR while reading invoices:", res)
+            raise
 
     def invoice_by_id(self, id: int) -> Invoice:
         inv = self._call("/invoices/{}".format(id), {"Invoice-Id": id})["data"]

@@ -85,6 +85,12 @@ def sync_contact(contact: holded.Contact) -> holded.Contact:
     return found
 
 
+# Creates or updates an invoice as needed
+def sync_invoice(rd_invoice: repairdesk.Invoice):
+    hd.list_invoices()
+    pass
+
+
 def convert_tax_class(id: str) -> str | None:
     if id == 0:
         return None
@@ -118,6 +124,7 @@ hd = Holded(HOLDED_API_KEY)
 
 def sync_new_invoices():
     logger.debug("Syncing new invoices")
+    # TODO: This assumes last created invoice is the newest (latest order id)
     last_invoice = hd.list_invoices(sort="created-desc")[0]
 
     # TODO: maybe manage refunds?
