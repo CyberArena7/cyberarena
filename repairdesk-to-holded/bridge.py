@@ -89,7 +89,7 @@ def convert_tax_class(id: str) -> str | None:
     if id == 0:
         return None
 
-    return TAX_CLASSES[id]
+    return TAX_CLASSES[str(id)]
 
 
 # We must fix prices because RepairDesk rounding is different from that of Holded
