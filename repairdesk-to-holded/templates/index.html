@@ -18,10 +18,10 @@
         </div>
         <div class="container">
             <h2>Logs</h2>
-            <form>
+            <form action="/logs/clear">
                 <button>Clear logs</button>
             </form>
-            <div id="logs" hx-get="/logs" hx-trigger="load, every 20s">Loading logs...</div>
+            <div id="logs" hx-get="/logs" hx-trigger="load, every 5s">Loading logs...</div>
         </div>
     </main>
 </body>

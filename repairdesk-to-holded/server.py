@@ -1,4 +1,4 @@
-from flask import Flask, render_template
+from flask import Flask, render_template, make_response
 from datetime import datetime
 import multiprocessing as mp
 
@@ -34,3 +34,9 @@ def status():
 @app.route("/logs")
 def logs():
     return render_template("logs.html", logs=open("/tmp/logs.txt").read().split("\n"))
+
+
+@app.route("/logs/clear")
+def clear_logs():
+    open("/tmp/logs.txt", "w").close()  # Clear file
+    return ("", 204)
