@@ -1,0 +1,4 @@
+- [ ] Mark rectificative invoices as `creditnote`
+- [ ] Proper sync of invoices
+  - [ ] Non-approved invoices => POST
+  - [ ] Approved invoices => Rectify + New Invoice

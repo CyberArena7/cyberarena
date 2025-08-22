@@ -5,6 +5,8 @@ import requests
 from datetime import datetime
 import json
 from time import sleep
+import decimal
+from decimal import Decimal
 
 # Docs: https://api-docs.repairdesk.co
 
@@ -18,17 +20,17 @@ class Item:
     name: str
     sku: str
     quantity: int
-    price: float | None  # Not tax included
-    tax: float | None
-    total: float | None
-    tax_class: int | None
-    tax_percent: float
+    price: Decimal | None  # Not tax included
+    tax: Decimal | None
+    total: Decimal | None
+    tax_class: Decimal | None
+    tax_percent: Decimal
 
 
 @dataclass
 class Payment:
     id: int
-    amount: float
+    amount: Decimal
     date: datetime
     method: str
     notes: str
@@ -78,9 +80,9 @@ class Invoice:
     id: int
     order_id: str
     date: datetime
-    subtotal: float
-    total_tax: float
-    total: float
+    subtotal: Decimal
+    total_tax: Decimal
+    total: Decimal
     notes: str
     customer: Customer
     status: str
@@ -176,7 +178,7 @@ class RepairDesk:
             print("ERROR while reading invoices:", res)
             raise
 
-    def invoice_by_id(self, id: int) -> Invoice:
+    def invoice_by_id(self, id: str) -> Invoice:
         inv = self._call("/invoices/{}".format(id), {"Invoice-Id": id})["data"]
 
         items = []
@@ -189,11 +191,11 @@ class RepairDesk:
                     name=item["name"],
                     sku=item["sku"],
                     quantity=item["quantity"],
-                    price=float(item["price"]),
-                    tax=float(item["gst"]),
-                    total=float(item["total"]),
+                    price=Decimal(item["price"]),
+                    tax=Decimal(item["gst"]),
+                    total=Decimal(item["total"]),
                     tax_class=item["tax_class"]["id"],
-                    tax_percent=float(item["tax_class"]["tax_percent"]),
+                    tax_percent=Decimal(item["tax_class"]["tax_percent"]),
                 )
             )
 
@@ -202,7 +204,7 @@ class RepairDesk:
             payments.append(
                 Payment(
                     id=payment["id"],
-                    amount=float(payment["amount"]),
+                    amount=Decimal(payment["amount"]),
                     date=datetime.fromtimestamp(payment["payment_date"]),
                     method=payment["method"],
                     notes=payment["notes"],
@@ -213,9 +215,9 @@ class RepairDesk:
             id=inv["summary"]["id"],
             order_id=inv["summary"]["order_id"],
             date=datetime.fromtimestamp(inv["summary"]["created_date"]),
-            subtotal=float(inv["summary"]["subtotal_without_symbol"]),
-            total_tax=float(inv["summary"]["total_tax_without_symbol"]),
-            total=float(inv["summary"]["total_without_symbol"]),
+            subtotal=Decimal(inv["summary"]["subtotal_without_symbol"]),
+            total_tax=Decimal(inv["summary"]["total_tax_without_symbol"]),
+            total=Decimal(inv["summary"]["total_without_symbol"]),
             customer=Customer(
                 full_name=inv["summary"]["customer"]["fullName"],
                 id=inv["summary"]["customer"]["cid"],

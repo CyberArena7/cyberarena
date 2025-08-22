@@ -19,7 +19,7 @@ def run_sync(exit_event):
             shared_dict["state"] = "running"
 
         bridge.sync_new_invoices()
-        bridge.sync_unpaid_invoices()
+        # bridge.sync_unpaid_invoices()
 
         end = datetime.now()
 

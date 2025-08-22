@@ -3,7 +3,7 @@
 mkdir -p dist
 
 echo "Creando tarball"
-tar cf dist/bridge.tar *.py static templates
+tar cf dist/bridge.tar *.py bridge/*.py static templates
 
 echo "Copiando archivos"
 scp dist/bridge.tar repairdesk-to-holded.service "$1:/tmp"

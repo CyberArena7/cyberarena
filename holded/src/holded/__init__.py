@@ -1,17 +1,18 @@
 from dataclasses import dataclass
-import json
+from enum import Enum
 import logging
 from typing import Any
 import requests
 from datetime import datetime
 from time import sleep
+from decimal import Decimal
 
 # Docs: https://developers.holded.com/reference
 
 BASE_URL = "https://api.holded.com/api/invoicing/v1"
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.WARN)
+logger.setLevel(logging.DEBUG)
 
 
 @dataclass
@@ -19,10 +20,10 @@ class Contact:
     id: str
     custom_id: str
     name: str
-    nif: str
-    email: str
+    nif: str | None
+    email: str | None
     phone: str | None
-    mobile: str
+    mobile: str | None
     type: str
     isperson: bool
 
@@ -31,14 +32,31 @@ class Contact:
 class Item:
     name: str
     units: int
-    subtotal: float
-    discount: float
-    tax_percentage: float
+    subtotal: Decimal
+    discount: Decimal
+    tax_percentage: Decimal
     taxes: list[str]
 
 
+class DocumentType(Enum):
+    INVOICE = "invoice"
+    CREDIT_NOTE = "credit_note"
+
+
+class DocumentSort(Enum):
+    CREATED_ASCENDING = "created-asc"
+    CREATED_DESCENDING = "created-desc"
+
+
+class DocumentStatus(Enum):
+    UNPAID = 0
+    PAID = 1
+    PARTIALLY_PAID = 2
+
+
 @dataclass
-class Invoice:
+class Document:
+    type: DocumentType
     id: str
     number: str
     date: datetime
@@ -46,15 +64,16 @@ class Invoice:
     items: list[Item]
     custom_fields: dict[str, str] | None
     notes: str | None
-    paid: float
-    pending: float
+    numbering_series_id: str
+    paid: Decimal
+    pending: Decimal
 
 
 @dataclass
 class Payment:
     date: datetime
     desc: str
-    amount: float
+    amount: Decimal
 
 
 @dataclass(frozen=True)
@@ -80,20 +99,21 @@ class Holded:
                 json=payload,
                 params=params,
             ).json()
-        except:
+        except Exception as e:
+            logger.error("Error on request {}", e)
             sleep(10)
             return self._call(method=method, endpoint=endpoint, params=params, payload=payload)
 
     # TODO: Some fields are not translated
-    # `sort` is either `created-asc` or `created-desc`
-    # `paid`: 0 = Not paid, 1 = Paid, 2 = Partially paid
-    def list_invoices(
+    def list_documents(
         self,
+        type: DocumentType,
         start: datetime | None = None,
         end: datetime | None = None,
-        sort: str | None = None,
-        paid: int | None = None,
-    ) -> list[Invoice]:
+        contact_id: str | None = None,
+        sort: DocumentSort | None = None,
+        paid: DocumentStatus | None = None,
+    ) -> list[Document]:
         if start is not None:
             start = int(start.timestamp())
         if end is not None:
@@ -101,33 +121,40 @@ class Holded:
 
         ret = self._call(
             "GET",
-            "/documents/invoice",
-            params={"starttmp": start, "endtmp": end, "sort": sort, "paid": paid},
+            "/documents/{}".format(type.value),
+            params={
+                "starttmp": start,
+                "endtmp": end,
+                "contactId": contact_id,
+                "sort": sort.value if sort is not None else None,
+                "paid": paid.value if paid is not None else None,
+            },
         )
 
         return list(
             map(
-                lambda i: Invoice(
+                lambda i: Document(
+                    type=type,
                     id=i["id"],
                     number=i["docNumber"],
                     date=datetime.fromtimestamp(i["date"]),
                     buyer=None,
                     items=None,
                     custom_fields=None,
+                    numbering_series_id=None,
                     notes=i["notes"],
-                    paid=i["paymentsTotal"],
-                    pending=i["paymentsPending"],
+                    paid=Decimal(i["paymentsTotal"]),
+                    pending=Decimal(i["paymentsPending"]),
                 ),
                 ret,
             )
         )
 
-    def create_invoice(self, invoice: Invoice) -> str:
+    def create_document(self, document: Document, draft: bool = True) -> str:
         payload = {
             "language": "es",
-            "contactId": invoice.buyer.id,
-            # "contactCode": invoice.buyer.nif,
-            "date": int(invoice.date.timestamp()),
+            "contactId": document.buyer.id,
+            "date": int(document.date.timestamp()),
             "items": list(
                 map(
                     lambda i: {
@@ -138,18 +165,19 @@ class Holded:
                         "tax": i.tax_percentage,
                         "taxes": i.taxes,
                     },
-                    invoice.items,
+                    document.items,
                 )
             ),
-            "invoiceNum": invoice.number,
+            "invoiceNum": document.number,
             "currency": "eur",
             "currencyChange": 1,
-            "customFields": invoice.custom_fields,
-            "notes": invoice.notes,
+            "customFields": document.custom_fields,
+            "notes": document.notes,
+            "approveDoc": not draft,
         }
         return self._call(
             "POST",
-            "/documents/invoice",
+            "/documents/{}".format(document.type.value),
             payload=payload,
         )["id"]
 
