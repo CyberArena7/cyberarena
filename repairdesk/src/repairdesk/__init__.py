@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from enum import Enum
 from functools import cache
 from typing import Any
 import requests
@@ -47,6 +48,7 @@ class Customer:
     state: str
     country: str
     nif: str | None
+    customer_group_id: str
 
 
 @dataclass
@@ -60,6 +62,13 @@ class Store:
     country: str
 
 
+class InvoiceStatus(Enum):
+    PAID = "Paid"
+    UNPAID = "UnPaid"
+    PARTIAL = "Partial"
+    REFUND = "Refund"
+
+
 @dataclass
 class BasicCustomer:
     id: str
@@ -71,7 +80,7 @@ class BasicInvoice:
     id: str
     order_id: str
     date: datetime
-    status: str
+    status: InvoiceStatus
     customer: BasicCustomer
 
 
@@ -85,7 +94,7 @@ class Invoice:
     total: Decimal
     notes: str
     customer: Customer
-    status: str
+    status: InvoiceStatus
     items: list[Item]
     payments: list[Payment]
 
@@ -140,8 +149,9 @@ class RepairDesk:
         self,
         from_date: datetime | None = None,
         to_date: datetime | None = None,
-        status: str | None = None,
+        status: InvoiceStatus | None = None,
         keyword: str | None = None,
+        page_size: int = 50,
     ) -> list[BasicInvoice]:
         if from_date is not None:
             from_date = int(from_date.timestamp())
@@ -153,8 +163,9 @@ class RepairDesk:
             {
                 "from_datetime": from_date,
                 "to_datetime": to_date,
-                "status": status,
+                "status": status.value if status is not None else None,
                 "keyword": keyword,
+                "pagesize": page_size,
             },
         )
 
@@ -166,7 +177,7 @@ class RepairDesk:
                         id=invoice["summary"]["id"],
                         order_id=invoice["summary"]["order_id"],
                         date=datetime.fromtimestamp(invoice["summary"]["created_date"]),
-                        status=invoice["summary"]["status"],
+                        status=InvoiceStatus(invoice["summary"]["status"]),
                         customer=BasicCustomer(
                             id=invoice["summary"]["customer"]["id"],
                             name=invoice["summary"]["customer"]["fullName"],
@@ -234,8 +245,9 @@ class RepairDesk:
                     ),
                     {"value": None},
                 )["value"],
+                customer_group_id=inv["summary"]["customer"]["cus_group_id"],
             ),
-            status=inv["summary"]["status"],
+            status=InvoiceStatus(inv["summary"]["status"]),
             items=items,
             payments=payments,
             notes=inv["summary"]["notes"],

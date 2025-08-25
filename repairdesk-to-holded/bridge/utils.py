@@ -16,7 +16,7 @@ def convert_customer(customer: repairdesk.Customer) -> holded.Contact:
 
     if customer.full_name == "CLIENTE SIN ALTA":
         nif = None
-    elif customer.nif == "-" or (customer.nif is not None and len(customer.nif) == 0):
+    elif customer.nif is not None and (customer.nif == "-" or len(customer.nif) == 0):
         nif = None
     else:
         nif = customer.nif
@@ -31,6 +31,8 @@ def convert_customer(customer: repairdesk.Customer) -> holded.Contact:
     else:
         mobile = customer.mobile
 
+    isperson = not CONFIG["customer_group_is_business"][customer.customer_group_id]
+
     # TODO: differentiate between business and person
     return holded.Contact(
         id=None,
@@ -41,7 +43,7 @@ def convert_customer(customer: repairdesk.Customer) -> holded.Contact:
         phone=None,
         nif=nif,
         type="client",
-        isperson=True,
+        isperson=isperson,
     )
 
 
@@ -60,17 +62,18 @@ def convert_document(
         custom_fields={
             "RepairDesk-Invoice-Id": str(rd_invoice.id)
         },  # Currently not working as current plan does not allow for custom fields
+        payments=list(map(convert_payment, rd_invoice.payments)),
         paid=None,
         pending=None,
     )
 
 
 def into_numbering_series(id: int) -> str:
-    return "RD{0:05}".format(id)
+    return "{0:05}".format(id)
 
 
 def from_numbering_series(id: str) -> int:
-    return int(id.lstrip("RD"))
+    return int(id)
 
 
 def convert_tax_class(id: str | None) -> str | None:

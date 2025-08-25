@@ -40,7 +40,7 @@ class Item:
 
 class DocumentType(Enum):
     INVOICE = "invoice"
-    CREDIT_NOTE = "credit_note"
+    CREDIT_NOTE = "creditnote"
 
 
 class DocumentSort(Enum):
@@ -55,25 +55,27 @@ class DocumentStatus(Enum):
 
 
 @dataclass
+class Payment:
+    date: datetime
+    desc: str | None
+    amount: Decimal
+
+
+@dataclass
 class Document:
     type: DocumentType
     id: str
     number: str
     date: datetime
-    buyer: Contact
+    # Either the full contact or just the id
+    buyer: Contact | str
     items: list[Item]
     custom_fields: dict[str, str] | None
     notes: str | None
-    numbering_series_id: str
+    numbering_series_id: str | None
+    payments: list[Payment]
     paid: Decimal
     pending: Decimal
-
-
-@dataclass
-class Payment:
-    date: datetime
-    desc: str
-    amount: Decimal
 
 
 @dataclass(frozen=True)
@@ -104,7 +106,6 @@ class Holded:
             sleep(10)
             return self._call(method=method, endpoint=endpoint, params=params, payload=payload)
 
-    # TODO: Some fields are not translated
     def list_documents(
         self,
         type: DocumentType,
@@ -114,17 +115,12 @@ class Holded:
         sort: DocumentSort | None = None,
         paid: DocumentStatus | None = None,
     ) -> list[Document]:
-        if start is not None:
-            start = int(start.timestamp())
-        if end is not None:
-            end = int(end.timestamp())
-
         ret = self._call(
             "GET",
             "/documents/{}".format(type.value),
             params={
-                "starttmp": start,
-                "endtmp": end,
+                "starttmp": start.timestamp() if start is not None else None,
+                "endtmp": end.timestamp() if end is not None else None,
                 "contactId": contact_id,
                 "sort": sort.value if sort is not None else None,
                 "paid": paid.value if paid is not None else None,
@@ -138,11 +134,35 @@ class Holded:
                     id=i["id"],
                     number=i["docNumber"],
                     date=datetime.fromtimestamp(i["date"]),
-                    buyer=None,
-                    items=None,
+                    buyer=i["contact"],
+                    items=list(
+                        map(
+                            lambda p: Item(
+                                name=p["name"],
+                                units=p["units"],
+                                taxes=p["taxes"],
+                                subtotal=p["price"],
+                                discount=p["discount"],
+                                tax_percentage=p["tax"],
+                            ),
+                            i["products"],
+                        )
+                    ),
                     custom_fields=None,
+                    # There's no trivial way to get this
                     numbering_series_id=None,
                     notes=i["notes"],
+                    payments=list(
+                        map(
+                            lambda p: Payment(
+                                date=datetime.fromtimestamp(p["date"]),
+                                amount=Decimal(p["amount"]),
+                                desc=None,
+                            ),
+                            # Uhh, pretty weird that this is needed but ok
+                            i.get("paymentsDetail", []),
+                        )
+                    ),
                     paid=Decimal(i["paymentsTotal"]),
                     pending=Decimal(i["paymentsPending"]),
                 ),
@@ -253,10 +273,10 @@ class Holded:
             },
         )["id"]
 
-    def pay_invoice(self, id: str, payment: Payment):
+    def pay_document(self, type: DocumentType, id: str, payment: Payment):
         return self._call(
             "POST",
-            "/documents/invoice/{}/pay".format(id),
+            "/documents/{}/{}/pay".format(type.value, id),
             payload={
                 "date": int(payment.date.timestamp()),
                 "desc": payment.desc,

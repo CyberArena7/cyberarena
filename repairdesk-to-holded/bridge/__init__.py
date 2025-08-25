@@ -1,4 +1,5 @@
 import logging
+import itertools
 from repairdesk import RepairDesk
 import repairdesk
 from holded import Holded
@@ -65,6 +66,7 @@ def _sync_contact(contact: holded.Contact) -> holded.Contact:
 # Creates or updates an invoice as needed
 def _sync_invoice(rd_invoice: repairdesk.Invoice, hd_contact: holded.Contact):
     # This is an awful method for finding invoices but there's no better way
+    # timestamp cannot be used as holded returns created timestamp on their end
     found = next(
         filter(
             lambda hd_invoice: rd_invoice.order_id == hd_invoice.number,
@@ -76,20 +78,49 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice, hd_contact: holded.Contact):
         ),
         None,
     )
+    # TODO: Check for any rectified
+    # TODO: Check if invoice was not found because of paging or limits (order id is behind current one)
 
     converted_hd_invoice = convert_document(holded.DocumentType.INVOICE, rd_invoice, hd_contact)
 
     # Invoice already exists (check changes and sync if needed)
     if found is not None:
         # TODO: copy / merge code from (partially) unpaid
-        pass
+
+        # First we sync payments as approved documents still allow adding payments
+        for rd_payment, hd_payment in itertools.zip_longest(
+            sorted(rd_invoice.payments, key=lambda p: p.date),
+            sorted(converted_hd_invoice.payments, key=lambda p: p.date),
+        ):
+            # Missing payments, just need to pay
+            if hd_payment is None:
+                hd.pay_document(found.type, found.id, convert_payment(rd_payment))
+            # Payment has been deleted from RepairDesk, ask for manual sync
+            elif rd_payment is None:
+                # TODO: raise error
+                pass
+            # Payments do not match, ask for manual sync
+            elif rd_payment.amount != hd_payment.amount:
+                # TODO: raise error
+                pass
+
+        # Document updates can fail if already approved
+        try:
+            mismatch = False
+            if rd_invoice.total != found.total
+                pass
+        # TODO: Approved document exception
+        # Document is already approved, so we must rectify and create a new invoice
+        except:
+            pass
+
     # Invoice doesn't exist (create)
     else:
         id = hd.create_document(converted_hd_invoice)
         logger.info("Created invoice {}".format(rd_invoice.order_id))
 
-        for payment in rd_invoice.payments:
-            hd.pay_invoice(id, convert_payment(payment))
+        for payment in converted_hd_invoice.payments:
+            hd.pay_document(converted_hd_invoice.type, id, payment)
             logger.info(
                 "Payed invoice {} with amount {}".format(rd_invoice.order_id, payment.amount)
             )
@@ -99,12 +130,22 @@ def sync_new_invoices():
     logger.debug("Syncing new invoices")
     # TODO: This assumes last created invoice is the newest (latest order id)
     # TODO: credit notes should also be fetched and biggest order id one should be taken
-    last_invoice = hd.list_documents(
+
+    invoices = hd.list_documents(
         type=holded.DocumentType.INVOICE, sort=holded.DocumentSort.CREATED_DESCENDING
+    )
+
+    last_invoice = sorted(
+        invoices,
+        # Kind of a hacky solution, but eh
+        key=lambda d: from_numbering_series(d.number if d.number is not None else "0"),
+        reverse=True,
     )[0]
 
+    # NOTE / Unfun fact: Holded floors dates to start of the day,
+    # so we must set the page size to a sufficiently large number
     for invoice in reversed(
-        rd.invoices(from_date=last_invoice.date - timedelta(1), to_date=datetime.now())
+        rd.invoices(from_date=last_invoice.date, to_date=datetime.now(), page_size=10000)
     ):
         if int(invoice.order_id) <= from_numbering_series(last_invoice.number):
             continue
