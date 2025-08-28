@@ -71,6 +71,10 @@ def main():
 
         created = datetime.fromtimestamp(ticket["summary"]["created_date"])
 
+        if "25350610" in map(lambda a: a["id"], ticket["accesory"]):
+            print(id, "no rush")
+            continue
+
         total_parts = 0
         for part in device["parts"]:
             total_parts += float(part["price"]) * int(part["quantity"])

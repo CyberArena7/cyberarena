@@ -9,6 +9,7 @@ from decimal import Decimal
 
 # Docs: https://developers.holded.com/reference
 
+# TODO: Error handling
 BASE_URL = "https://api.holded.com/api/invoicing/v1"
 
 logger = logging.getLogger(__name__)
@@ -71,9 +72,11 @@ class Document:
     buyer: Contact | str
     items: list[Item]
     custom_fields: dict[str, str] | None
+    tags: list[str]
     notes: str | None
     numbering_series_id: str | None
     payments: list[Payment]
+    total: Decimal
     paid: Decimal
     pending: Decimal
 
@@ -141,13 +144,14 @@ class Holded:
                                 name=p["name"],
                                 units=p["units"],
                                 taxes=p["taxes"],
-                                subtotal=p["price"],
-                                discount=p["discount"],
-                                tax_percentage=p["tax"],
+                                subtotal=Decimal(p["price"]),
+                                discount=Decimal(p["discount"]),
+                                tax_percentage=Decimal(p["tax"]),
                             ),
                             i["products"],
                         )
                     ),
+                    tags=i["tags"],
                     custom_fields=None,
                     # There's no trivial way to get this
                     numbering_series_id=None,
@@ -163,6 +167,7 @@ class Holded:
                             i.get("paymentsDetail", []),
                         )
                     ),
+                    total=Decimal(i["total"]),
                     paid=Decimal(i["paymentsTotal"]),
                     pending=Decimal(i["paymentsPending"]),
                 ),
@@ -191,6 +196,7 @@ class Holded:
             "invoiceNum": document.number,
             "currency": "eur",
             "currencyChange": 1,
+            "tags": document.tags,
             "customFields": document.custom_fields,
             "notes": document.notes,
             "approveDoc": not draft,
@@ -200,6 +206,10 @@ class Holded:
             "/documents/{}".format(document.type.value),
             payload=payload,
         )["id"]
+
+    def delete_document(self, document: Document):
+        assert document.id is not None
+        self._call("DELETE", "/documents/{}/{}".format(document.type.value, document.id))
 
     def _into_contact(self, response: dict[str, Any]):
         return Contact(

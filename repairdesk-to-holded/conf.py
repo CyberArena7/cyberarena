@@ -10,8 +10,7 @@ exit_event = threading.Event()
 
 
 def run_sync(exit_event):
-    # global shared_lock, shared_dict
-
+    counter = 0
     while True:
         start = datetime.now()
 
@@ -19,7 +18,8 @@ def run_sync(exit_event):
             shared_dict["state"] = "running"
 
         bridge.sync_new_invoices()
-        # bridge.sync_unpaid_invoices()
+        if counter == 0:
+            bridge.sync_last_invoices()
 
         end = datetime.now()
 
@@ -27,6 +27,8 @@ def run_sync(exit_event):
             shared_dict["last_run"] = (end - start).total_seconds()
             shared_dict["state"] = "waiting for next loop"
             shared_dict["next_loop"] = (end + timedelta(seconds=TIME_BETWEEN_LOOPS)).timestamp()
+
+        counter = (counter + 1) % 5
 
         if exit_event.wait(timeout=TIME_BETWEEN_LOOPS):
             break

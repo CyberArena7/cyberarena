@@ -10,6 +10,8 @@ shared_dict = manager.dict(
 )
 shared_lock = manager.Lock()
 
+warnings_lock = manager.Lock()
+
 
 @app.route("/")
 def index():

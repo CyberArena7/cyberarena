@@ -1,4 +1,5 @@
 import logging
+from decimal import Decimal
 import itertools
 from repairdesk import RepairDesk
 import repairdesk
@@ -64,37 +65,98 @@ def _sync_contact(contact: holded.Contact) -> holded.Contact:
 
 
 # Creates or updates an invoice as needed
-def _sync_invoice(rd_invoice: repairdesk.Invoice, hd_contact: holded.Contact):
+def _sync_invoice(rd_invoice: repairdesk.Invoice):
+    hd_contact = _sync_contact(convert_customer(rd_invoice.customer))
+
+    contact_invoices = sorted(
+        hd.list_documents(
+            type=holded.DocumentType.INVOICE,
+            contact_id=hd_contact.id,
+            sort=holded.DocumentSort.CREATED_DESCENDING,
+        ),
+        key=lambda i: int(i.number if i.number is not None else "0"),
+        reverse=True,
+    )
+
     # This is an awful method for finding invoices but there's no better way
     # timestamp cannot be used as holded returns created timestamp on their end
     found = next(
         filter(
             lambda hd_invoice: rd_invoice.order_id == hd_invoice.number,
-            hd.list_documents(
-                type=holded.DocumentType.INVOICE,
-                contact_id=hd_contact.id,
-                sort=holded.DocumentSort.CREATED_DESCENDING,
-            ),
+            contact_invoices,
         ),
         None,
     )
-    # TODO: Check for any rectified
     # TODO: Check if invoice was not found because of paging or limits (order id is behind current one)
+    # TODO: whether document should be instantly approved or not (no ticket associated)
 
     converted_hd_invoice = convert_document(holded.DocumentType.INVOICE, rd_invoice, hd_contact)
 
     # Invoice already exists (check changes and sync if needed)
     if found is not None:
-        # TODO: copy / merge code from (partially) unpaid
+        mismatch = False
+        reason = ""
+        if (rd_invoice.total - found.total) > Decimal("0.001"):
+            reason = "total prices do not match, RepairDesk: {}, Holded: {}".format(
+                rd_invoice.total, found.total
+            )
+            logger.debug("Invoice {} total price does not match".format(rd_invoice.order_id))
+            mismatch = True
+        else:
+            for rd_item, hd_item in itertools.zip_longest(rd_invoice.items, found.items):
+                if rd_item is None or hd_item is None:
+                    if rd_item is not None:
+                        missing = rd_item.name
+                    else:
+                        missing = hd_item.name
+
+                    reason = "missing item {}".format(missing)
+                    mismatch = True
+                    logger.debug("missing item {}", found.number)
+                    break
+
+                # TODO: change types of repairdesk to only have Decimal
+                assert rd_item.price is not None
+                assert rd_item.tax is not None
+
+                # Not checking exactly because imprecisions are very likely to occur
+                if (rd_item.price + rd_item.tax) - (
+                    hd_item.subtotal * (1 + hd_item.tax_percentage / 100)
+                ) > Decimal("0.001"):
+                    reason = (
+                        "price mismatch on individual item {}; RepairDesk: {}, Holded: {}".format(
+                            rd_item.name,
+                            rd_item.price + rd_item.tax,
+                            hd_item.subtotal * (1 + hd_item.tax_percentage / 100),
+                        )
+                    )
+                    mismatch = True
+                    logger.debug("price mismatch {}", found.number)
+                    break
+
+        if mismatch:
+            logger.info("Invoice {} is unsynced, reason: {}".format(rd_invoice.order_id, reason))
+            try:
+                hd.delete_document(found)
+                new_id = hd.create_document(converted_hd_invoice)
+                for payment in converted_hd_invoice.payments:
+                    hd.pay_document(converted_hd_invoice.type, new_id, payment)
+            except Exception as e:
+                # TODO: Create rectificative, this requires following the chain of related documents
+                # which is not well defined through API so this is out of scope
+
+                # TODO: Warning
+                raise e
 
         # First we sync payments as approved documents still allow adding payments
         for rd_payment, hd_payment in itertools.zip_longest(
             sorted(rd_invoice.payments, key=lambda p: p.date),
-            sorted(converted_hd_invoice.payments, key=lambda p: p.date),
+            sorted(found.payments, key=lambda p: p.date),
         ):
             # Missing payments, just need to pay
             if hd_payment is None:
                 hd.pay_document(found.type, found.id, convert_payment(rd_payment))
+                logger.info("Payed {} for invoice {}".format(rd_payment.amount, found.number))
             # Payment has been deleted from RepairDesk, ask for manual sync
             elif rd_payment is None:
                 # TODO: raise error
@@ -103,16 +165,6 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice, hd_contact: holded.Contact):
             elif rd_payment.amount != hd_payment.amount:
                 # TODO: raise error
                 pass
-
-        # Document updates can fail if already approved
-        try:
-            mismatch = False
-            if rd_invoice.total != found.total
-                pass
-        # TODO: Approved document exception
-        # Document is already approved, so we must rectify and create a new invoice
-        except:
-            pass
 
     # Invoice doesn't exist (create)
     else:
@@ -128,9 +180,6 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice, hd_contact: holded.Contact):
 
 def sync_new_invoices():
     logger.debug("Syncing new invoices")
-    # TODO: This assumes last created invoice is the newest (latest order id)
-    # TODO: credit notes should also be fetched and biggest order id one should be taken
-
     invoices = hd.list_documents(
         type=holded.DocumentType.INVOICE, sort=holded.DocumentSort.CREATED_DESCENDING
     )
@@ -151,103 +200,12 @@ def sync_new_invoices():
             continue
 
         invoice = rd.invoice_by_id(invoice.id)
-        contact = _sync_contact(convert_customer(invoice.customer))
 
-        _sync_invoice(invoice, contact)
-
-    # TODO: maybe manage refunds?
-    # for invoice in reversed(
-    #     rd.invoices(from_date=last_invoice.date - timedelta(seconds=1), to_date=datetime.now())
-    # ):
-    #     if invoice.order_id <= last_invoice.number:
-    #         continue
-
-    #     invoice = rd.invoice_by_id(invoice.id)
-    #     contact = sync_contact(convert_customer(invoice.customer))
-
-    #     items = list(map(convert_item, invoice.items))
-
-    #     hd_invoice = holded.Invoice(
-    #         id=None,
-    #         number=invoice.order_id,
-    #         date=invoice.date,
-    #         buyer=contact,
-    #         items=items,
-    #         notes=invoice.notes,
-    #         custom_fields={
-    #             "RepairDesk-Invoice-Id": str(invoice.id)
-    #         },  # Currently not working as current plan does not allow for custom fields
-    #         paid=None,
-    #         pending=None,
-    #     )
-    #     logger.info("Creating invoice {}".format(invoice.order_id))
-    #     id = hd.create_document(hd_invoice)
-
-    #     for payment in invoice.payments:
-    #         logger.info(
-    #             "Paying invoice {} with amount {} (id: {})".format(
-    #                 hd_invoice.number, payment.amount, payment.id
-    #             )
-    #         )
-    #         hd.pay_invoice(id, convert_payment(payment))
+        _sync_invoice(invoice)
 
 
-# def sync_unpaid_invoices():
-#     logger.debug("Syncing unpaid invoices")
-#     # Unpaid invoices
-#     for invoice in hd.list_invoices(sort="created-asc", paid=0):
-#         # Repairdesk invoice with same ID
-#         rd_invoice = next(
-#             filter(lambda i: i.order_id == invoice.number, rd.invoices(keyword=invoice.number)),
-#             None,
-#         )
-
-#         if rd_invoice is not None:
-#             rd_invoice = rd.invoice_by_id(rd_invoice.id)
-#             for payment in rd_invoice.payments:
-#                 logger.info(
-#                     "Paying invoice {} with amount {}".format(invoice.number, payment.amount)
-#                 )
-#                 hd.pay_invoice(invoice.id, convert_payment(payment))
-#         else:
-#             logger.warning(
-#                 "An unpaid invoice ({}) has no counterpart in RepairDesk".format(invoice.number)
-#             )
-
-#     # Partially paid invoices
-#     for invoice in hd.list_invoices(sort="created-asc", paid=2):
-#         # Repairdesk invoice with same ID
-#         rd_invoice = next(
-#             filter(lambda i: i.order_id == invoice.number, rd.invoices(keyword=invoice.number)),
-#             None,
-#         )
-
-#         if rd_invoice is not None:
-#             rd_invoice = rd.invoice_by_id(rd_invoice.id)
-#             logger.debug("Checking partially unpaid invoice {}".format(rd_invoice.order_id))
-
-#             total = 0
-#             logger.debug("\t payments {}".format(rd_invoice.payments))
-#             # We assume payments can't be deleted or edited
-#             for payment in sorted(rd_invoice.payments, key=lambda p: p.date):
-#                 if total > invoice.paid:
-#                     logger.error("Payments in invoice {} do not match!", rd_invoice.order_id)
-#                 elif total == invoice.paid:
-#                     logger.info(
-#                         "Paying invoice {} with amount {}".format(invoice.number, payment.amount)
-#                     )
-#                     hd.pay_invoice(invoice.id, convert_payment(payment))
-#                     total += payment.amount
-#                     invoice.paid += payment.amount
-#                 else:
-#                     total += payment.amount
-
-#             logger.debug("\t total: {}".format(total))
-#             logger.debug("\t pending: {}".format(invoice.pending))
-
-#         else:
-#             logger.warning(
-#                 "A partially paid invoice ({}) has no counterpart in RepairDesk".format(
-#                     invoice.number
-#                 )
-#             )
+# Syncs n invoices indiscriminately (check for updates)
+def sync_last_invoices(page: int = 50):
+    for invoice in reversed(rd.invoices(page_size=page)):
+        logger.debug(invoice.customer)
+        _sync_invoice(rd.invoice_by_id(invoice.id))

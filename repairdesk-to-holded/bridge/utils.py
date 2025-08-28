@@ -1,13 +1,50 @@
 # Contains functions to convert from RepairDesk types into Holded ones
 
+from dataclasses import dataclass
 import holded
 import repairdesk
 import json
 from decimal import Decimal
+from server import warnings_lock
+import os
 
-
-# TODO: reading config twice is kind of bad...
 CONFIG = json.load(open("/etc/repairdesk-to-holded.conf.json"))
+
+
+# Adds a warning to the web UI
+def append_warning(
+    message: str, hd_invoice_id: str | None = None, rd_invoice_id: str | None = None
+):
+    # TODO: if a invoice is already affected, stack messages
+    with warnings_lock:
+        # TODO: wrong paths are not handled...
+
+        with open(CONFIG["data_dir"].rstrip("/") + "/warnings.json") as warn_file:
+            warns: list[dict[str, list[str] | str | None]] = json.load(warn_file)
+
+        idx = next(
+            (
+                i
+                for i, w in enumerate(warns)
+                if (rd_invoice_id is not None and w["rd_invoice_id"] == rd_invoice_id)
+                or (hd_invoice_id is not None or w["hd_invoice_id"] == hd_invoice_id)
+            ),
+            None,
+        )
+
+        if idx is not None:
+            warns[idx]["messages"].append(message)
+        else:
+            warns.append(
+                {
+                    "hd_invoice_id": hd_invoice_id,
+                    "rd_invoice_id": rd_invoice_id,
+                    "messages": [message],
+                }
+            )
+
+        with open(CONFIG["data_dir"].rstrip("/") + "/warnings.json", "w") as warn_file:
+            json.dump(warns, warn_file)
 
 
 # Converts a RepairDesk customer into a Holded contact
@@ -59,12 +96,17 @@ def convert_document(
         items=list(map(convert_item, rd_invoice.items)),
         numbering_series_id=CONFIG["num_series_id"][type.value],
         notes=rd_invoice.notes,
-        custom_fields={
-            "RepairDesk-Invoice-Id": str(rd_invoice.id)
-        },  # Currently not working as current plan does not allow for custom fields
+        # Currently not working as current plan does not allow for custom fields
+        # custom_fields={
+        #     "RepairDesk-Invoice-Id": str(rd_invoice.id)
+        # },
+        custom_fields=None,
+        tags=[],
         payments=list(map(convert_payment, rd_invoice.payments)),
         paid=None,
         pending=None,
+        # TODO: this can be calculated
+        total=None,
     )
 
 
