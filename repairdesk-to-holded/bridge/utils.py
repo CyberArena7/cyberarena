@@ -1,50 +1,80 @@
 # Contains functions to convert from RepairDesk types into Holded ones
 
 from dataclasses import dataclass
+import dataclasses
 import holded
 import repairdesk
 import json
 from decimal import Decimal
 from server import warnings_lock
+from uuid import uuid4
 import os
 
+# Importing twice is pretty bad...
 CONFIG = json.load(open("/etc/repairdesk-to-holded.conf.json"))
 
 
+@dataclass
+class Warning:
+    messages: list[str]
+    hd_invoice_id: str | None
+    rd_invoice_id: str | None
+    id: str | None = None
+
+
 # Adds a warning to the web UI
-def append_warning(
-    message: str, hd_invoice_id: str | None = None, rd_invoice_id: str | None = None
-):
+def append_warning(warning: Warning):
     # TODO: if a invoice is already affected, stack messages
     with warnings_lock:
         # TODO: wrong paths are not handled...
+        try:
+            with open(CONFIG["data_dir"].rstrip("/") + "/warnings.json") as warn_file:
+                warns = list(
+                    map(
+                        lambda w: Warning(
+                            id=w["id"],
+                            messages=w["messages"],
+                            hd_invoice_id=w["hd_invoice_id"],
+                            rd_invoice_id=w["rd_invoice_id"],
+                        ),
+                        json.load(warn_file),
+                    )
+                )
+        except FileNotFoundError:
+            warns = []
 
-        with open(CONFIG["data_dir"].rstrip("/") + "/warnings.json") as warn_file:
-            warns: list[dict[str, list[str] | str | None]] = json.load(warn_file)
-
-        idx = next(
-            (
-                i
-                for i, w in enumerate(warns)
-                if (rd_invoice_id is not None and w["rd_invoice_id"] == rd_invoice_id)
-                or (hd_invoice_id is not None or w["hd_invoice_id"] == hd_invoice_id)
-            ),
-            None,
-        )
+        # Find index of existing warning or None
+        if warning.hd_invoice_id is not None and warning.rd_invoice_id is not None:
+            idx = next(
+                (
+                    i
+                    for i, w in enumerate(warns)
+                    if (w.rd_invoice_id == warning.rd_invoice_id)
+                    and (w.hd_invoice_id == warning.hd_invoice_id)
+                ),
+                None,
+            )
+        elif warning.hd_invoice_id is not None:
+            idx = next(
+                (i for i, w in enumerate(warns) if (w.hd_invoice_id == warning.hd_invoice_id)),
+                None,
+            )
+        elif warning.rd_invoice_id is not None:
+            idx = next(
+                (i for i, w in enumerate(warns) if (w.rd_invoice_id == warning.rd_invoice_id)),
+                None,
+            )
+        else:
+            idx = None
 
         if idx is not None:
-            warns[idx]["messages"].append(message)
+            warns[idx].messages += warning.messages
         else:
-            warns.append(
-                {
-                    "hd_invoice_id": hd_invoice_id,
-                    "rd_invoice_id": rd_invoice_id,
-                    "messages": [message],
-                }
-            )
+            warning.id = str(uuid4())
+            warns.append(warning)
 
         with open(CONFIG["data_dir"].rstrip("/") + "/warnings.json", "w") as warn_file:
-            json.dump(warns, warn_file)
+            json.dump(list(map(dataclasses.asdict, warns)), warn_file)
 
 
 # Converts a RepairDesk customer into a Holded contact
@@ -96,10 +126,6 @@ def convert_document(
         items=list(map(convert_item, rd_invoice.items)),
         numbering_series_id=CONFIG["num_series_id"][type.value],
         notes=rd_invoice.notes,
-        # Currently not working as current plan does not allow for custom fields
-        # custom_fields={
-        #     "RepairDesk-Invoice-Id": str(rd_invoice.id)
-        # },
         custom_fields=None,
         tags=[],
         payments=list(map(convert_payment, rd_invoice.payments)),

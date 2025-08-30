@@ -84,10 +84,27 @@ class BasicInvoice:
     customer: BasicCustomer
 
 
+# TODO: lots of missing fields
+@dataclass
+class Device:
+    id: str
+    name: str
+    status: str
+
+
+# TODO: lots of missing fields
+@dataclass
+class Ticket:
+    id: str
+    order_id: str
+    devices: list[Device]
+
+
 @dataclass
 class Invoice:
     id: int
     order_id: str
+    ticket: Ticket | None
     date: datetime
     subtotal: Decimal
     total_tax: Decimal
@@ -107,13 +124,13 @@ class ItemNotFound(Exception):
 class RepairDesk:
     api_key: str
 
-    # TODO: Proper rate limiting
+    # TODO: Error handling, maybe extract data by default
     def _call(self, endpoint: str, params: dict[str, Any]) -> dict:
         try:
             return requests.get(
                 BASE_URL + endpoint, params=(params | {"api_key": self.api_key})
             ).json()
-        except:
+        except Exception:
             sleep(10)
             return self._call(endpoint, params)
 
@@ -189,8 +206,28 @@ class RepairDesk:
             print("ERROR while reading invoices:", res)
             raise
 
+    def ticket_by_id(self, id: str) -> Ticket:
+        ticket = self._call("/tickets/{}".format(id), {})["data"]
+        return Ticket(
+            id=ticket["summary"]["id"],
+            order_id=ticket["summary"]["order_id"],
+            devices=list(
+                map(
+                    lambda d: Device(
+                        id=d["device"]["id"], name=d["device"]["name"], status=d["status"]["name"]
+                    ),
+                    ticket["devices"],
+                )
+            ),
+        )
+
     def invoice_by_id(self, id: str) -> Invoice:
-        inv = self._call("/invoices/{}".format(id), {"Invoice-Id": id})["data"]
+        inv = self._call("/invoices/{}".format(id), {})["data"]
+
+        if inv["summary"]["ticket"]["isTicket"]:
+            ticket = self.ticket_by_id(inv["summary"]["ticket"]["id"])
+        else:
+            ticket = None
 
         items = []
         for item in inv["items"]:
@@ -225,6 +262,7 @@ class RepairDesk:
         return Invoice(
             id=inv["summary"]["id"],
             order_id=inv["summary"]["order_id"],
+            ticket=ticket,
             date=datetime.fromtimestamp(inv["summary"]["created_date"]),
             subtotal=Decimal(inv["summary"]["subtotal_without_symbol"]),
             total_tax=Decimal(inv["summary"]["total_tax_without_symbol"]),

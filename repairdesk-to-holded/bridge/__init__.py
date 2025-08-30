@@ -9,10 +9,12 @@ from datetime import datetime, timedelta
 import json
 import os
 from .utils import (
+    append_warning,
     convert_customer,
     convert_document,
     from_numbering_series,
     convert_payment,
+    Warning,
 )
 
 
@@ -90,6 +92,16 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
     # TODO: Check if invoice was not found because of paging or limits (order id is behind current one)
     # TODO: whether document should be instantly approved or not (no ticket associated)
 
+    if rd_invoice.ticket is not None:
+        logger.debug("Invoice: {}; {}".format(rd_invoice.id, rd_invoice.ticket))
+        draft = False
+        for device in rd_invoice.ticket.devices:
+            if device.status not in CONFIG["finished_status"]:
+                draft = True
+                break
+    else:
+        draft = False
+
     converted_hd_invoice = convert_document(holded.DocumentType.INVOICE, rd_invoice, hd_contact)
 
     # Invoice already exists (check changes and sync if needed)
@@ -141,11 +153,18 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                 new_id = hd.create_document(converted_hd_invoice)
                 for payment in converted_hd_invoice.payments:
                     hd.pay_document(converted_hd_invoice.type, new_id, payment)
+            # TODO: Holded exception
             except Exception as e:
                 # TODO: Create rectificative, this requires following the chain of related documents
                 # which is not well defined through API so this is out of scope
 
-                # TODO: Warning
+                append_warning(
+                    Warning(
+                        hd_invoice_id=found.id,
+                        rd_invoice_id=str(rd_invoice.id),
+                        messages=["approved document is mismatched"],
+                    )
+                )
                 raise e
 
         # First we sync payments as approved documents still allow adding payments
@@ -159,17 +178,28 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                 logger.info("Payed {} for invoice {}".format(rd_payment.amount, found.number))
             # Payment has been deleted from RepairDesk, ask for manual sync
             elif rd_payment is None:
-                # TODO: raise error
-                pass
+                append_warning(
+                    Warning(
+                        rd_invoice_id=str(rd_invoice.id),
+                        hd_invoice_id=found.id,
+                        messages=["missing payments in RepairDesk (payments deleted?)"],
+                    )
+                )
             # Payments do not match, ask for manual sync
             elif rd_payment.amount != hd_payment.amount:
-                # TODO: raise error
+                append_warning(
+                    Warning(
+                        rd_invoice_id=str(rd_invoice.id),
+                        hd_invoice_id=found.id,
+                        messages=["mismatched payment amount between Holded and RepairDesk"],
+                    )
+                )
                 pass
 
     # Invoice doesn't exist (create)
     else:
         id = hd.create_document(converted_hd_invoice)
-        logger.info("Created invoice {}".format(rd_invoice.order_id))
+        logger.info("Created invoice {}, draft: {}".format(rd_invoice.order_id, draft))
 
         for payment in converted_hd_invoice.payments:
             hd.pay_document(converted_hd_invoice.type, id, payment)
@@ -207,5 +237,4 @@ def sync_new_invoices():
 # Syncs n invoices indiscriminately (check for updates)
 def sync_last_invoices(page: int = 50):
     for invoice in reversed(rd.invoices(page_size=page)):
-        logger.debug(invoice.customer)
         _sync_invoice(rd.invoice_by_id(invoice.id))
