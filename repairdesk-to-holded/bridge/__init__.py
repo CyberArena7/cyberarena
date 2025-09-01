@@ -31,6 +31,11 @@ logger.addHandler(logging.FileHandler("/tmp/logs.txt"))
 rd = RepairDesk(REPAIRDESK_API_KEY)
 hd = Holded(HOLDED_API_KEY)
 
+# Contains the name of all ticket statuses in the "Closed" category
+CLOSED_STATUS_LIST = list(
+    map(lambda s: s.name, filter(lambda s: s.type == "Closed", rd.ticket_statuses()))
+)
+
 
 # Finds (and updates if needed) a contact or creates it
 def _sync_contact(contact: holded.Contact) -> holded.Contact:
@@ -96,7 +101,7 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
         logger.debug("Invoice: {}; {}".format(rd_invoice.id, rd_invoice.ticket))
         draft = False
         for device in rd_invoice.ticket.devices:
-            if device.status not in CONFIG["finished_status"]:
+            if device.status not in CLOSED_STATUS_LIST:
                 draft = True
                 break
     else:

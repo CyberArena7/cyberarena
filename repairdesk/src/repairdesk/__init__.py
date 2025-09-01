@@ -14,6 +14,13 @@ from decimal import Decimal
 BASE_URL = "https://api.repairdesk.co/api/web/v1"
 
 
+@dataclass
+class TicketStatus:
+    name: str
+    color: str
+    type: str
+
+
 # NOTE: Has many more fields but unused at the moment
 @dataclass
 class Item:
@@ -133,6 +140,12 @@ class RepairDesk:
         except Exception:
             sleep(10)
             return self._call(endpoint, params)
+
+    def ticket_statuses(self) -> list[TicketStatus]:
+        ret = self._call("/statuses", {})
+        return list(
+            map(lambda s: TicketStatus(name=s["name"], color=s["color"], type=s["type"]), ret)
+        )
 
     # Searches an item by either name or SKU
     @cache
