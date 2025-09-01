@@ -8,22 +8,15 @@ import json
 from decimal import Decimal
 from server import warnings_lock
 from uuid import uuid4
+from server import Warning
 import os
 
 # Importing twice is pretty bad...
 CONFIG = json.load(open("/etc/repairdesk-to-holded.conf.json"))
 
 
-@dataclass
-class Warning:
-    messages: list[str]
-    hd_invoice_id: str | None
-    rd_invoice_id: str | None
-    id: str | None = None
-
-
 # Adds a warning to the web UI
-def append_warning(warning: Warning):
+def append_warning(message: str, order_id: str, hd_invoice_id: str, rd_invoice_id: str):
     # TODO: if a invoice is already affected, stack messages
     with warnings_lock:
         # TODO: wrong paths are not handled...
@@ -36,6 +29,7 @@ def append_warning(warning: Warning):
                             messages=w["messages"],
                             hd_invoice_id=w["hd_invoice_id"],
                             rd_invoice_id=w["rd_invoice_id"],
+                            order_id=w["order_id"],
                         ),
                         json.load(warn_file),
                     )
@@ -44,34 +38,41 @@ def append_warning(warning: Warning):
             warns = []
 
         # Find index of existing warning or None
-        if warning.hd_invoice_id is not None and warning.rd_invoice_id is not None:
+        if hd_invoice_id is not None and rd_invoice_id is not None:
             idx = next(
                 (
                     i
                     for i, w in enumerate(warns)
-                    if (w.rd_invoice_id == warning.rd_invoice_id)
-                    and (w.hd_invoice_id == warning.hd_invoice_id)
+                    if (w.rd_invoice_id == rd_invoice_id) and (w.hd_invoice_id == hd_invoice_id)
                 ),
                 None,
             )
-        elif warning.hd_invoice_id is not None:
+        elif hd_invoice_id is not None:
             idx = next(
-                (i for i, w in enumerate(warns) if (w.hd_invoice_id == warning.hd_invoice_id)),
+                (i for i, w in enumerate(warns) if (w.hd_invoice_id == hd_invoice_id)),
                 None,
             )
-        elif warning.rd_invoice_id is not None:
+        elif rd_invoice_id is not None:
             idx = next(
-                (i for i, w in enumerate(warns) if (w.rd_invoice_id == warning.rd_invoice_id)),
+                (i for i, w in enumerate(warns) if (w.rd_invoice_id == rd_invoice_id)),
                 None,
             )
         else:
             idx = None
 
         if idx is not None:
-            warns[idx].messages += warning.messages
+            if message not in warns[idx].messages:
+                warns[idx].messages.append(message)
         else:
-            warning.id = str(uuid4())
-            warns.append(warning)
+            warns.append(
+                Warning(
+                    id=str(uuid4()),
+                    messages=[message],
+                    hd_invoice_id=hd_invoice_id,
+                    rd_invoice_id=rd_invoice_id,
+                    order_id=order_id,
+                )
+            )
 
         with open(CONFIG["data_dir"].rstrip("/") + "/warnings.json", "w") as warn_file:
             json.dump(list(map(dataclasses.asdict, warns)), warn_file)

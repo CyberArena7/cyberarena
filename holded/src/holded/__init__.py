@@ -93,7 +93,7 @@ class Holded:
         payload: dict[str, Any] | None = None,
     ):
         try:
-            return requests.request(
+            ret = requests.request(
                 method,
                 BASE_URL + endpoint,
                 headers={
@@ -103,9 +103,10 @@ class Holded:
                 },
                 json=payload,
                 params=params,
-            ).json()
+            )
+            return ret.json()
         except Exception as e:
-            logger.error("Error on request {}", e)
+            logger.error("Error on request {}".format(e))
             sleep(10)
             return self._call(method=method, endpoint=endpoint, params=params, payload=payload)
 

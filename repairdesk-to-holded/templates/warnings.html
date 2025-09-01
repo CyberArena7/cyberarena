@@ -1,0 +1,14 @@
+{% for warn in warnings %}
+<div>
+    <h3>Invoice #{{ warn.order_id }} (<a href="https://{{ business_name }}.repairdesk.co/index.php?r=invoice/view&id={{ warn.rd_invoice_id }}">RepairDesk</a>, <a href="https://app.holded.com/sales/revenue#open:invoice-{{ warn.hd_invoice_id }}">Holded</a>)</h3>
+    <ul>
+        {% for msg in warn.messages %}
+        <li>{{ msg }}</li>
+        {% endfor %}
+    </ul>
+    <form action="/warnings/discard">
+        <input type="hidden" name="id" value="{{ warn.id }}">
+        <input type="submit" value="Discard">
+    </form>
+</div>
+{% endfor %}

@@ -73,6 +73,7 @@ def _sync_contact(contact: holded.Contact) -> holded.Contact:
 
 # Creates or updates an invoice as needed
 def _sync_invoice(rd_invoice: repairdesk.Invoice):
+    logger.debug("Syncing invoice {}".format(rd_invoice.order_id))
     hd_contact = _sync_contact(convert_customer(rd_invoice.customer))
 
     contact_invoices = sorted(
@@ -98,7 +99,6 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
     # TODO: whether document should be instantly approved or not (no ticket associated)
 
     if rd_invoice.ticket is not None:
-        logger.debug("Invoice: {}; {}".format(rd_invoice.id, rd_invoice.ticket))
         draft = False
         for device in rd_invoice.ticket.devices:
             if device.status not in CLOSED_STATUS_LIST:
@@ -111,6 +111,7 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
 
     # Invoice already exists (check changes and sync if needed)
     if found is not None:
+        logger.debug("\tholded invoice found, id: {}".format(found.id))
         mismatch = False
         reason = ""
         if (rd_invoice.total - found.total) > Decimal("0.001"):
@@ -129,7 +130,7 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
 
                     reason = "missing item {}".format(missing)
                     mismatch = True
-                    logger.debug("missing item {}", found.number)
+                    logger.debug("\tmissing item {}", found.number)
                     break
 
                 # TODO: change types of repairdesk to only have Decimal
@@ -148,7 +149,7 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                         )
                     )
                     mismatch = True
-                    logger.debug("price mismatch {}", found.number)
+                    logger.debug("\tprice mismatch {}", found.number)
                     break
 
         if mismatch:
@@ -164,11 +165,10 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                 # which is not well defined through API so this is out of scope
 
                 append_warning(
-                    Warning(
-                        hd_invoice_id=found.id,
-                        rd_invoice_id=str(rd_invoice.id),
-                        messages=["approved document is mismatched"],
-                    )
+                    order_id=rd_invoice.order_id,
+                    hd_invoice_id=found.id,
+                    rd_invoice_id=str(rd_invoice.id),
+                    message="approved document is mismatched",
                 )
                 raise e
 
@@ -184,33 +184,33 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
             # Payment has been deleted from RepairDesk, ask for manual sync
             elif rd_payment is None:
                 append_warning(
-                    Warning(
-                        rd_invoice_id=str(rd_invoice.id),
-                        hd_invoice_id=found.id,
-                        messages=["missing payments in RepairDesk (payments deleted?)"],
-                    )
+                    order_id=rd_invoice.order_id,
+                    rd_invoice_id=str(rd_invoice.id),
+                    hd_invoice_id=found.id,
+                    message="missing payments in RepairDesk (payments deleted?)",
                 )
             # Payments do not match, ask for manual sync
-            elif rd_payment.amount != hd_payment.amount:
+            elif (rd_payment.amount - hd_payment.amount) > Decimal("0.001"):
                 append_warning(
-                    Warning(
-                        rd_invoice_id=str(rd_invoice.id),
-                        hd_invoice_id=found.id,
-                        messages=["mismatched payment amount between Holded and RepairDesk"],
-                    )
+                    order_id=rd_invoice.order_id,
+                    rd_invoice_id=str(rd_invoice.id),
+                    hd_invoice_id=found.id,
+                    message="mismatched payment amount between Holded and RepairDesk",
                 )
-                pass
 
     # Invoice doesn't exist (create)
     else:
-        id = hd.create_document(converted_hd_invoice)
-        logger.info("Created invoice {}, draft: {}".format(rd_invoice.order_id, draft))
+        if draft is False:
+            id = hd.create_document(converted_hd_invoice)
+            logger.info("Created invoice {}, draft: {}".format(rd_invoice.order_id, draft))
 
-        for payment in converted_hd_invoice.payments:
-            hd.pay_document(converted_hd_invoice.type, id, payment)
-            logger.info(
-                "Payed invoice {} with amount {}".format(rd_invoice.order_id, payment.amount)
-            )
+            for payment in converted_hd_invoice.payments:
+                hd.pay_document(converted_hd_invoice.type, id, payment)
+                logger.info(
+                    "Payed invoice {} with amount {}".format(rd_invoice.order_id, payment.amount)
+                )
+        else:
+            logger.debug("\thas associated ticket and is not finished, not syncing")
 
 
 def sync_new_invoices():
@@ -241,5 +241,6 @@ def sync_new_invoices():
 
 # Syncs n invoices indiscriminately (check for updates)
 def sync_last_invoices(page: int = 50):
+    logger.debug("Checking last {} invoices".format(page))
     for invoice in reversed(rd.invoices(page_size=page)):
         _sync_invoice(rd.invoice_by_id(invoice.id))

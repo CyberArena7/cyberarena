@@ -29,6 +29,7 @@ div.container {
     max-height: 600px;
 }
 
-div#logs {
+div#logs,
+div#warnings {
     overflow: auto;
 }

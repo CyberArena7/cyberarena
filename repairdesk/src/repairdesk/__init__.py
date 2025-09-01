@@ -142,7 +142,7 @@ class RepairDesk:
             return self._call(endpoint, params)
 
     def ticket_statuses(self) -> list[TicketStatus]:
-        ret = self._call("/statuses", {})
+        ret = self._call("/statuses", {})["data"]
         return list(
             map(lambda s: TicketStatus(name=s["name"], color=s["color"], type=s["type"]), ret)
         )
