@@ -1,6 +1,7 @@
 import logging
 from decimal import Decimal
 import itertools
+import threading
 from repairdesk import RepairDesk
 import repairdesk
 from holded import Holded
@@ -213,7 +214,7 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
             logger.debug("\thas associated ticket and is not finished, not syncing")
 
 
-def sync_new_invoices():
+def sync_new_invoices(exit_event: threading.Event):
     logger.debug("Syncing new invoices")
     invoices = hd.list_documents(
         type=holded.DocumentType.INVOICE, sort=holded.DocumentSort.CREATED_DESCENDING
@@ -231,6 +232,8 @@ def sync_new_invoices():
     for invoice in reversed(
         rd.invoices(from_date=last_invoice.date, to_date=datetime.now(), page_size=10000)
     ):
+        if exit_event.is_set():
+            break
         if int(invoice.order_id) <= from_numbering_series(last_invoice.number):
             continue
 
@@ -240,7 +243,12 @@ def sync_new_invoices():
 
 
 # Syncs n invoices indiscriminately (check for updates)
-def sync_last_invoices(page: int = 50):
+def sync_last_invoices(exit_event: threading.Event, page: int = 50):
     logger.debug("Checking last {} invoices".format(page))
-    for invoice in reversed(rd.invoices(page_size=page)):
+    for idx, invoice in enumerate(reversed(rd.invoices(page_size=page))):
+        if exit_event.is_set():
+            logger.warning(
+                "Shutting down in the middle of an invoice check, {}/{}".format(idx, page)
+            )
+            break
         _sync_invoice(rd.invoice_by_id(invoice.id))
