@@ -1,6 +1,6 @@
 {% for warn in warnings %}
 <div>
-    <h3>Invoice #{{ warn.order_id }} (<a href="https://{{ business_name }}.repairdesk.co/index.php?r=invoice/view&id={{ warn.rd_invoice_id }}">RepairDesk</a>, <a href="https://app.holded.com/sales/revenue#open:invoice-{{ warn.hd_invoice_id }}">Holded</a>)</h3>
+    <h3>Invoice #{{ warn.order_id }} ({% if warn.rd_invoice_id is not none %}<a href="https://{{ business_name }}.repairdesk.co/index.php?r=invoice/view&id={{ warn.rd_invoice_id }}">RepairDesk</a>{% endif %}{% if warn.hd_invoice_id is not none %}, <a href="https://app.holded.com/sales/revenue#open:invoice-{{ warn.hd_invoice_id }}">Holded</a>{% endif %})</h3>
     <ul>
         {% for msg in warn.messages %}
         <li>{{ msg }}</li>

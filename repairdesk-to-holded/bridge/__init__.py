@@ -15,7 +15,6 @@ from .utils import (
     convert_document,
     from_numbering_series,
     convert_payment,
-    Warning,
 )
 
 
@@ -211,6 +210,14 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                     "Payed invoice {} with amount {}".format(rd_invoice.order_id, payment.amount)
                 )
         else:
+            assert rd_invoice.ticket is not None
+            if (datetime.now() - rd_invoice.ticket.created_date) > timedelta(days=30):
+                append_warning(
+                    message="associated ticket is over 1 month old",
+                    hd_invoice_id=None,
+                    rd_invoice_id=str(rd_invoice.id),
+                    order_id=rd_invoice.order_id,
+                )
             logger.debug("\thas associated ticket and is not finished, not syncing")
 
 

@@ -16,7 +16,9 @@ CONFIG = json.load(open("/etc/repairdesk-to-holded.conf.json"))
 
 
 # Adds a warning to the web UI
-def append_warning(message: str, order_id: str, hd_invoice_id: str, rd_invoice_id: str):
+def append_warning(
+    message: str, order_id: str, hd_invoice_id: str | None, rd_invoice_id: str | None
+):
     # TODO: if a invoice is already affected, stack messages
     with warnings_lock:
         # TODO: wrong paths are not handled...

@@ -4,9 +4,7 @@ from functools import cache
 from typing import Any
 import requests
 from datetime import datetime
-import json
 from time import sleep
-import decimal
 from decimal import Decimal
 
 # Docs: https://api-docs.repairdesk.co
@@ -103,6 +101,7 @@ class Device:
 @dataclass
 class Ticket:
     id: str
+    created_date: datetime
     order_id: str
     devices: list[Device]
 
@@ -232,6 +231,7 @@ class RepairDesk:
                     ticket["devices"],
                 )
             ),
+            created_date=datetime.fromtimestamp(ticket["summary"]["created_date"]),
         )
 
     def invoice_by_id(self, id: str) -> Invoice:
