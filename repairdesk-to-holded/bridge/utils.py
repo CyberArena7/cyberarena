@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import dataclasses
+from datetime import timedelta
 import holded
 import repairdesk
 import json
@@ -13,6 +14,36 @@ import os
 
 # Importing twice is pretty bad...
 CONFIG = json.load(open("/etc/repairdesk-to-holded.conf.json"))
+
+
+# Paginates using timestamps to get all invoices
+def find_holded_invoice_by_number(
+    hd: holded.Holded, contact: holded.Contact, number: str
+) -> holded.Document | None:
+    # We assume sorting by created order sorts by the `date` field, which might not be true
+    initial_search = hd.list_documents(
+        type=holded.DocumentType.INVOICE,
+        contact_id=contact.id,
+        sort=holded.DocumentSort.CREATED_DESCENDING,
+    )
+
+    found = next(filter(lambda i: i.number == number, initial_search), None)
+    if found is not None:
+        return found
+    else:
+        oldest_invoice = sorted(initial_search, key=lambda i: i.date)[0]
+        while page := hd.list_documents(
+            type=holded.DocumentType.INVOICE,
+            contact_id=contact.id,
+            sort=holded.DocumentSort.CREATED_DESCENDING,
+            # TODO: Kind of an arbitrary amount of time to paginate, should be checked
+            start=oldest_invoice.date - timedelta(days=90),
+            end=oldest_invoice.date,
+        ):
+            oldest_invoice = sorted(page, key=lambda i: i.date)[0]
+            found = next(filter(lambda i: i.number == number, page), None)
+            if found is not None:
+                return found
 
 
 # Adds a warning to the web UI

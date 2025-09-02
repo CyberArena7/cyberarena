@@ -13,6 +13,7 @@ from .utils import (
     append_warning,
     convert_customer,
     convert_document,
+    find_holded_invoice_by_number,
     from_numbering_series,
     convert_payment,
 )
@@ -100,25 +101,10 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
         rebu = True
 
     hd_contact = _sync_contact(convert_customer(rd_invoice.customer))
-    contact_invoices = sorted(
-        hd.list_documents(
-            type=holded.DocumentType.INVOICE,
-            contact_id=hd_contact.id,
-            sort=holded.DocumentSort.CREATED_DESCENDING,
-        ),
-        key=lambda i: int(i.number if i.number is not None else "0"),
-        reverse=True,
-    )
 
     # This is an awful method for finding invoices but there's no better way
     # timestamp cannot be used as holded returns created timestamp on their end
-    found = next(
-        filter(
-            lambda hd_invoice: rd_invoice.order_id == hd_invoice.number,
-            contact_invoices,
-        ),
-        None,
-    )
+    found = find_holded_invoice_by_number(hd, hd_contact, rd_invoice.order_id)
     # TODO: Check if invoice was not found because of paging or limits (order id is behind current one)
     # TODO: whether document should be instantly approved or not (no ticket associated)
 
