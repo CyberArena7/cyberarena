@@ -74,8 +74,18 @@ def _sync_contact(contact: holded.Contact) -> holded.Contact:
 # Creates or updates an invoice as needed
 def _sync_invoice(rd_invoice: repairdesk.Invoice):
     logger.debug("Syncing invoice {}".format(rd_invoice.order_id))
-    hd_contact = _sync_contact(convert_customer(rd_invoice.customer))
 
+    # Sanity checks
+    if abs(sum(map(lambda i: i.total, rd_invoice.items)) - rd_invoice.total) > Decimal("0.001"):
+        append_warning(
+            message="failed sanity check: sum of items is not equal to invoice total",
+            rd_invoice_id=str(rd_invoice.id),
+            order_id=rd_invoice.order_id,
+            hd_invoice_id=None,
+        )
+        return
+
+    hd_contact = _sync_contact(convert_customer(rd_invoice.customer))
     contact_invoices = sorted(
         hd.list_documents(
             type=holded.DocumentType.INVOICE,
@@ -114,7 +124,7 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
         logger.debug("\tholded invoice found, id: {}".format(found.id))
         mismatch = False
         reason = ""
-        if (rd_invoice.total - found.total) > Decimal("0.001"):
+        if abs(rd_invoice.total - found.total) > Decimal("0.001"):
             reason = "total prices do not match, RepairDesk: {}, Holded: {}".format(
                 rd_invoice.total, found.total
             )
@@ -138,8 +148,9 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                 assert rd_item.tax is not None
 
                 # Not checking exactly because imprecisions are very likely to occur
-                if (rd_item.price + rd_item.tax) - (
-                    hd_item.subtotal * (1 + hd_item.tax_percentage / 100)
+                if abs(
+                    (rd_item.price + rd_item.tax)
+                    - (hd_item.subtotal * (1 + hd_item.tax_percentage / 100))
                 ) > Decimal("0.001"):
                     reason = (
                         "price mismatch on individual item {}; RepairDesk: {}, Holded: {}".format(
