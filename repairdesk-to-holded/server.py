@@ -1,4 +1,4 @@
-from flask import Flask, render_template, make_response, request, redirect
+from flask import Flask, render_template, request, redirect
 from datetime import datetime
 import multiprocessing as mp
 from dataclasses import dataclass

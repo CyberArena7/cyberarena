@@ -162,6 +162,7 @@ def convert_item(item: repairdesk.Item) -> holded.Item:
 
     return holded.Item(
         name=item.name,
+        desc=item.notes,
         subtotal=subtotal,
         units=item.quantity,
         discount=Decimal(0),

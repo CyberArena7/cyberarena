@@ -25,6 +25,7 @@ class Item:
     id: str
     name: str
     sku: str
+    notes: str | None  # Invoice notes
     quantity: int
     price: Decimal | None  # Not tax included
     tax: Decimal | None
@@ -166,6 +167,7 @@ class RepairDesk:
                 id=match["id"],
                 name=match["name"],
                 sku=match["sku"],
+                notes=None,
                 quantity=None,
                 price=None,
                 tax=None,
@@ -251,6 +253,7 @@ class RepairDesk:
                     id=item["id"],
                     name=item["name"],
                     sku=item["sku"],
+                    notes=item["notes"],
                     quantity=item["quantity"],
                     price=Decimal(item["price"]),
                     tax=Decimal(item["gst"]),

@@ -32,6 +32,7 @@ class Contact:
 @dataclass
 class Item:
     name: str
+    desc: str | None
     units: int
     subtotal: Decimal
     discount: Decimal
@@ -143,6 +144,7 @@ class Holded:
                         map(
                             lambda p: Item(
                                 name=p["name"],
+                                desc=p["desc"],
                                 units=p["units"],
                                 taxes=p["taxes"],
                                 subtotal=Decimal(p["price"]),
@@ -185,6 +187,7 @@ class Holded:
                 map(
                     lambda i: {
                         "name": i.name,
+                        "desc": i.desc,
                         "units": i.units,
                         "subtotal": i.subtotal,
                         "discount": i.discount,
