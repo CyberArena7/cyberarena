@@ -144,7 +144,7 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
 
                     reason = "missing item {}".format(missing)
                     mismatch = True
-                    logger.debug("\tmissing item {}", found.number)
+                    logger.debug("\tmissing item {}".format(found.number))
                     break
 
                 # TODO: change types of repairdesk to only have Decimal
@@ -164,7 +164,7 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                         )
                     )
                     mismatch = True
-                    logger.debug("\tprice mismatch {}", found.number)
+                    logger.debug("\tprice mismatch {}".format(found.number))
                     break
 
         if mismatch:
