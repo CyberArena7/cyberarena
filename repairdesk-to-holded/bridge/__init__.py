@@ -74,16 +74,30 @@ def _sync_contact(contact: holded.Contact) -> holded.Contact:
 # Creates or updates an invoice as needed
 def _sync_invoice(rd_invoice: repairdesk.Invoice):
     logger.debug("Syncing invoice {}".format(rd_invoice.order_id))
+    rebu = False
 
     # Sanity checks
+    # Sum of item prices is not equal to invoice total (usually payments will later mismatch)
     if abs(sum(map(lambda i: i.total, rd_invoice.items)) - rd_invoice.total) > Decimal("0.001"):
         append_warning(
-            message="failed sanity check: sum of items is not equal to invoice total",
+            message="failed sanity check: sum of item prices is not equal to invoice total price",
             rd_invoice_id=str(rd_invoice.id),
             order_id=rd_invoice.order_id,
             hd_invoice_id=None,
         )
         return
+    # Invoice with Bienes Usados tax must not contain general IVA items
+    if CONFIG["used_goods_tax_class"] in map(lambda i: i.tax_class, rd_invoice.items):
+        for item in rd_invoice.items:
+            if item.total != Decimal(0) and item.tax_class != CONFIG["used_goods_tax_class"]:
+                append_warning(
+                    message="failed sanity check: REBU invoice contains other items with non-zero price",
+                    rd_invoice_id=str(rd_invoice.id),
+                    order_id=rd_invoice.order_id,
+                    hd_invoice_id=None,
+                )
+                return
+        rebu = True
 
     hd_contact = _sync_contact(convert_customer(rd_invoice.customer))
     contact_invoices = sorted(
@@ -115,7 +129,11 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                 draft = True
                 break
     else:
-        draft = False
+        if not rebu:
+            draft = False
+        # REBU invoices must have a seat created manually
+        else:
+            draft = True
 
     converted_hd_invoice = convert_document(holded.DocumentType.INVOICE, rd_invoice, hd_contact)
 
@@ -221,15 +239,32 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                     "Payed invoice {} with amount {}".format(rd_invoice.order_id, payment.amount)
                 )
         else:
-            assert rd_invoice.ticket is not None
-            if (datetime.now() - rd_invoice.ticket.created_date) > timedelta(days=30):
+            if rebu:
+                id = hd.create_document(converted_hd_invoice)
+                for payment in converted_hd_invoice.payments:
+                    hd.pay_document(converted_hd_invoice.type, id, payment)
+                    logger.info(
+                        "Payed invoice {} with amount {}".format(
+                            rd_invoice.order_id, payment.amount
+                        )
+                    )
                 append_warning(
-                    message="associated ticket is over 1 month old",
-                    hd_invoice_id=None,
+                    message="REBU invoice",
                     rd_invoice_id=str(rd_invoice.id),
                     order_id=rd_invoice.order_id,
+                    hd_invoice_id=id,
                 )
-            logger.debug("\thas associated ticket and is not finished, not syncing")
+
+            else:
+                assert rd_invoice.ticket is not None
+                if (datetime.now() - rd_invoice.ticket.created_date) > timedelta(days=30):
+                    append_warning(
+                        message="associated ticket is over 1 month old",
+                        hd_invoice_id=None,
+                        rd_invoice_id=str(rd_invoice.id),
+                        order_id=rd_invoice.order_id,
+                    )
+                logger.debug("\thas associated ticket and is not finished, not syncing")
 
 
 def sync_new_invoices(exit_event: threading.Event):
