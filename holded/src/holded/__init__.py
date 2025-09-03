@@ -16,6 +16,12 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
+# TODO: convert into an enum with all possible errors
+@dataclass
+class ApiError(Exception):
+    info: str
+
+
 @dataclass
 class Contact:
     id: str
@@ -205,15 +211,20 @@ class Holded:
             "notes": document.notes,
             "approveDoc": not draft,
         }
-        return self._call(
+        ret = self._call(
             "POST",
             "/documents/{}".format(document.type.value),
             payload=payload,
-        )["id"]
+        )
+        if ret["status"] != 1:
+            raise ApiError(ret["info"])
+        return ret["id"]
 
     def delete_document(self, document: Document):
         assert document.id is not None
-        self._call("DELETE", "/documents/{}/{}".format(document.type.value, document.id))
+        ret = self._call("DELETE", "/documents/{}/{}".format(document.type.value, document.id))
+        if ret["status"] != 1:
+            raise ApiError(info=ret["info"])
 
     def _into_contact(self, response: dict[str, Any]):
         return Contact(
