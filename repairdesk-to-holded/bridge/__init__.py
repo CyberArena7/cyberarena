@@ -153,13 +153,13 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
 
                 # Not checking exactly because imprecisions are very likely to occur
                 if abs(
-                    (rd_item.price + rd_item.tax)
+                    (rd_item.total / rd_item.quantity)
                     - (hd_item.subtotal * (1 + hd_item.tax_percentage / 100))
                 ) > Decimal("0.001"):
                     reason = (
                         "price mismatch on individual item {}; RepairDesk: {}, Holded: {}".format(
                             rd_item.name,
-                            rd_item.price + rd_item.tax,
+                            rd_item.total / rd_item.quantity,
                             hd_item.subtotal * (1 + hd_item.tax_percentage / 100),
                         )
                     )
