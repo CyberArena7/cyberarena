@@ -99,6 +99,15 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                 )
                 return
         rebu = True
+    # Walkin customer invoices are not allowed
+    if int(rd_invoice.customer.id) == 0:
+        append_warning(
+            message="failed sanity check: walkin customer invoices are not allowed",
+            rd_invoice_id=str(rd_invoice.id),
+            order_id=rd_invoice.order_id,
+            hd_invoice_id=None,
+        )
+        return
 
     hd_contact = _sync_contact(convert_customer(rd_invoice.customer))
 

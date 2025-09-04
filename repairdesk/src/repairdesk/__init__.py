@@ -33,7 +33,7 @@ class Item:
     price: Decimal | None  # Not tax included
     tax: Decimal | None
     total: Decimal | None
-    tax_class: Decimal | None
+    tax_class: int | None
     tax_percent: Decimal
 
 
@@ -57,7 +57,7 @@ class Customer:
     state: str
     country: str
     nif: str | None
-    customer_group_id: str
+    customer_group_id: str | None
 
 
 @dataclass
@@ -91,6 +91,7 @@ class BasicInvoice:
     order_id: str
     date: datetime
     customer: BasicCustomer
+    status: InvoiceStatus | None
 
 
 # TODO: lots of missing fields
@@ -121,7 +122,7 @@ class Invoice:
     total: Decimal
     notes: str
     customer: Customer
-    status: InvoiceStatus
+    status: InvoiceStatus | None
     items: list[Item]
     payments: list[Payment]
 
@@ -220,7 +221,9 @@ class RepairDesk:
                     order_id=invoice["summary"]["order_id"],
                     date=datetime.fromtimestamp(invoice["summary"]["created_date"]),
                     # Sometimes RepairDesk returns no status for some reason
-                    # status=InvoiceStatus(invoice["summary"]["status"]),
+                    status=InvoiceStatus(invoice["summary"]["status"])
+                    if "status" in invoice["summary"].keys()
+                    else None,
                     customer=BasicCustomer(
                         id=invoice["summary"]["customer"]["id"],
                         name=invoice["summary"]["customer"]["fullName"],
@@ -304,13 +307,19 @@ class RepairDesk:
                 nif=next(
                     filter(
                         lambda i: i["name"] == "nif",
-                        inv["summary"]["customer"]["custom_fields"],
+                        inv["summary"]["customer"]["custom_fields"]
+                        if "custom_fields" in inv["summary"]["customer"].keys()
+                        else [],
                     ),
                     {"value": None},
                 )["value"],
-                customer_group_id=inv["summary"]["customer"]["cus_group_id"],
+                customer_group_id=inv["summary"]["customer"]["cus_group_id"]
+                if "cus_group_id" in inv["summary"]["customer"].keys()
+                else None,
             ),
-            status=InvoiceStatus(inv["summary"]["status"]),
+            status=InvoiceStatus(inv["summary"]["status"])
+            if "status" in inv["summary"].keys()
+            else None,
             items=items,
             payments=payments,
             notes=inv["summary"]["notes"],

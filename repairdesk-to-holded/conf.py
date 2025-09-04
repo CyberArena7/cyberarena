@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 def run_sync(exit_event: threading.Event):
-    bridge.sync_last_invoices(exit_event=exit_event, time_before=timedelta(days=30 * 4))
+    bridge.sync_last_invoices(exit_event=exit_event, time_before=timedelta(days=19))
 
     # New invoices only
     schedule.every(1).minutes.do(bridge.sync_new_invoices, exit_event=exit_event)
