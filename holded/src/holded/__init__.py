@@ -98,7 +98,7 @@ class Holded:
         endpoint: str,
         params: dict[str, Any] | None = None,
         payload: dict[str, Any] | None = None,
-    ):
+    ) -> dict | list:
         try:
             ret = requests.request(
                 method,

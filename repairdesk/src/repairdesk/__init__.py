@@ -6,8 +6,11 @@ import requests
 from datetime import datetime
 from time import sleep
 from decimal import Decimal
+import logging
 
 # Docs: https://api-docs.repairdesk.co
+
+logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.repairdesk.co/api/web/v1"
 
@@ -127,6 +130,12 @@ class ItemNotFound(Exception):
     pass
 
 
+@dataclass
+class ApiError(Exception):
+    status_code: int
+    message: str
+
+
 @dataclass(frozen=True)
 class RepairDesk:
     api_key: str
@@ -134,25 +143,28 @@ class RepairDesk:
     # TODO: Error handling, maybe extract data by default
     def _call(self, endpoint: str, params: dict[str, Any]) -> dict:
         try:
-            return requests.get(
+            ret = requests.get(
                 BASE_URL + endpoint, params=(params | {"api_key": self.api_key})
             ).json()
-        except Exception:
+        except Exception as e:
+            logger.warning("Request failed, retrying: {}".format(e))
             sleep(10)
             return self._call(endpoint, params)
 
+        if not ret["success"]:
+            raise ApiError(ret["statusCode"], ret["message"])
+        return ret["data"]
+
     def ticket_statuses(self) -> list[TicketStatus]:
-        ret = self._call("/statuses", {})["data"]
+        ret = self._call("/statuses", {})
         return list(
             map(lambda s: TicketStatus(name=s["name"], color=s["color"], type=s["type"]), ret)
         )
 
     # Searches an item by either name or SKU
-    @cache
     def search_item(self, query: str) -> Item:
-        print("Searching for:", query)
         res = self._call("/inventory", {"keyword": query})
-        items = res["data"]["inventoryListData"]
+        items = res["inventoryListData"]
 
         match = None
         for item in items:
@@ -201,27 +213,23 @@ class RepairDesk:
         )
 
         invoices = []
-        try:
-            for invoice in res["data"]["invoiceData"]:
-                invoices.append(
-                    BasicInvoice(
-                        id=invoice["summary"]["id"],
-                        order_id=invoice["summary"]["order_id"],
-                        date=datetime.fromtimestamp(invoice["summary"]["created_date"]),
-                        status=InvoiceStatus(invoice["summary"]["status"]),
-                        customer=BasicCustomer(
-                            id=invoice["summary"]["customer"]["id"],
-                            name=invoice["summary"]["customer"]["fullName"],
-                        ),
-                    )
+        for invoice in res["invoiceData"]:
+            invoices.append(
+                BasicInvoice(
+                    id=invoice["summary"]["id"],
+                    order_id=invoice["summary"]["order_id"],
+                    date=datetime.fromtimestamp(invoice["summary"]["created_date"]),
+                    status=InvoiceStatus(invoice["summary"]["status"]),
+                    customer=BasicCustomer(
+                        id=invoice["summary"]["customer"]["id"],
+                        name=invoice["summary"]["customer"]["fullName"],
+                    ),
                 )
-            return invoices
-        except:
-            print("ERROR while reading invoices:", res)
-            raise
+            )
+        return invoices
 
     def ticket_by_id(self, id: str) -> Ticket:
-        ticket = self._call("/tickets/{}".format(id), {})["data"]
+        ticket = self._call("/tickets/{}".format(id), {})
         return Ticket(
             id=ticket["summary"]["id"],
             order_id=ticket["summary"]["order_id"],
@@ -237,7 +245,7 @@ class RepairDesk:
         )
 
     def invoice_by_id(self, id: str) -> Invoice:
-        inv = self._call("/invoices/{}".format(id), {})["data"]
+        inv = self._call("/invoices/{}".format(id), {})
 
         if inv["summary"]["ticket"]["isTicket"]:
             ticket = self.ticket_by_id(inv["summary"]["ticket"]["id"])
