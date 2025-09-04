@@ -1,0 +1,21 @@
+{
+  // Only invoices that were emitted after this date will be synced
+  // format: unix timestamp
+  "only_sync_later_than": 1757010490,
+  // Folder where state will be stored (notably warnings), should be
+  // persistent storage
+  "data_dir": "/var/lib/bridge",
+  // The Holded's numbering series id
+  "num_series_id": {
+    "invoice": "holdedid"
+  },
+  // Mapping from RepairDesk tax class to a Holded tax class
+  "tax_classes": {
+    "repairdeskid": "s_iva_21",
+    "repairdeskid2": "holded tax identifier"
+  },
+  // RepairDesk tax class id for REBU, used to detect REBU invoices
+  "used_goods_tax_class": 23,
+  // Name of the RepairDesk account, used for links to invoices in warnings
+  "business_name": "coolbusiness23"
+}

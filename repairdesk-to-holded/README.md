@@ -20,4 +20,4 @@ flowchart TD
 ```
 
 ## Configuration
-A mapping of tax classes from RepairDesk ids into Holded tax identifiers must be configured at `/etc/repairdesk-to-holded/tax-classes.json`
+A sample configuration file can be found [here](./example.conf.jsonc), it must be located at `/etc/repairdesk-to-holded.conf.json` and must contain **no comments**
