@@ -8,9 +8,12 @@ import repairdesk
 import json
 from decimal import Decimal
 from server import warnings_lock
+import logging
 from uuid import uuid4
 from server import Warning
 import os
+
+logger = logging.getLogger(__name__)
 
 # Importing twice is pretty bad...
 CONFIG = json.load(open("/etc/repairdesk-to-holded.conf.json"))
@@ -21,10 +24,15 @@ def find_holded_invoice_by_number(
     hd: holded.Holded, contact: holded.Contact, number: str
 ) -> holded.Document | None:
     # We assume sorting by created order sorts by the `date` field, which might not be true
-    initial_search = hd.list_documents(
-        type=holded.DocumentType.INVOICE,
-        contact_id=contact.id,
-        sort=holded.DocumentSort.CREATED_DESCENDING,
+    initial_search = list(
+        filter(
+            lambda i: i.status != holded.DocumentStatus.CANCELED,
+            hd.list_documents(
+                type=holded.DocumentType.INVOICE,
+                contact_id=contact.id,
+                sort=holded.DocumentSort.CREATED_DESCENDING,
+            ),
+        )
     )
 
     found = next(filter(lambda i: i.number == number, initial_search), None)
@@ -32,13 +40,18 @@ def find_holded_invoice_by_number(
         return found
     else:
         oldest_invoice = sorted(initial_search, key=lambda i: i.date)[0]
-        while page := hd.list_documents(
-            type=holded.DocumentType.INVOICE,
-            contact_id=contact.id,
-            sort=holded.DocumentSort.CREATED_DESCENDING,
-            # TODO: Kind of an arbitrary amount of time to paginate, should be checked
-            start=oldest_invoice.date - timedelta(days=90),
-            end=oldest_invoice.date,
+        while page := list(
+            filter(
+                lambda i: i.status != holded.DocumentStatus.CANCELED,
+                hd.list_documents(
+                    type=holded.DocumentType.INVOICE,
+                    contact_id=contact.id,
+                    sort=holded.DocumentSort.CREATED_DESCENDING,
+                    # TODO: Kind of an arbitrary amount of time to paginate, should be checked
+                    start=oldest_invoice.date - timedelta(days=90),
+                    end=oldest_invoice.date,
+                ),
+            )
         ):
             oldest_invoice = sorted(page, key=lambda i: i.date)[0]
             found = next(filter(lambda i: i.number == number, page), None)
@@ -154,6 +167,7 @@ def convert_document(
     return holded.Document(
         type=type,
         id=None,
+        status=None,
         number=into_numbering_series(int(rd_invoice.order_id)),
         date=rd_invoice.date,
         buyer=hd_contact,

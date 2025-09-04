@@ -25,7 +25,7 @@ CONFIG = json.load(open("/etc/repairdesk-to-holded.conf.json"))
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 logger.addHandler(logging.FileHandler("/tmp/logs.txt"))
 
 
@@ -223,8 +223,8 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
     # Invoice doesn't exist (create)
     else:
         if draft is False:
-            id = hd.create_document(converted_hd_invoice)
-            logger.info("Created invoice {}, draft: {}".format(rd_invoice.order_id, draft))
+            id = hd.create_document(converted_hd_invoice, draft=draft)
+            logger.info("Created invoice {}".format(rd_invoice.order_id))
 
             for payment in converted_hd_invoice.payments:
                 hd.pay_document(converted_hd_invoice.type, id, payment)
@@ -234,6 +234,7 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
         else:
             if rebu:
                 id = hd.create_document(converted_hd_invoice, draft=True)
+                logger.info("Created draft {}".format(rd_invoice.order_id))
                 for payment in converted_hd_invoice.payments:
                     hd.pay_document(converted_hd_invoice.type, id, payment)
                     logger.info(
