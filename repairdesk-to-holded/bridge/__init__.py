@@ -184,32 +184,32 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                     rd_invoice_id=str(rd_invoice.id),
                     message="approved document is mismatched",
                 )
-
-        # First we sync payments as approved documents still allow adding payments
-        for rd_payment, hd_payment in itertools.zip_longest(
-            sorted(rd_invoice.payments, key=lambda p: p.date),
-            sorted(found.payments, key=lambda p: p.date),
-        ):
-            # Missing payments, just need to pay
-            if hd_payment is None:
-                hd.pay_document(found.type, found.id, convert_payment(rd_payment))
-                logger.info("Payed {} for invoice {}".format(rd_payment.amount, found.number))
-            # Payment has been deleted from RepairDesk, ask for manual sync
-            elif rd_payment is None:
-                append_warning(
-                    order_id=rd_invoice.order_id,
-                    rd_invoice_id=str(rd_invoice.id),
-                    hd_invoice_id=found.id,
-                    message="missing payments in RepairDesk (payments deleted?)",
-                )
-            # Payments do not match, ask for manual sync
-            elif (rd_payment.amount - hd_payment.amount) > Decimal("0.001"):
-                append_warning(
-                    order_id=rd_invoice.order_id,
-                    rd_invoice_id=str(rd_invoice.id),
-                    hd_invoice_id=found.id,
-                    message="mismatched payment amount between Holded and RepairDesk",
-                )
+        else:
+            # Sync payments
+            for rd_payment, hd_payment in itertools.zip_longest(
+                sorted(rd_invoice.payments, key=lambda p: p.date),
+                sorted(found.payments, key=lambda p: p.date),
+            ):
+                # Missing payments, just need to pay
+                if hd_payment is None:
+                    hd.pay_document(found.type, found.id, convert_payment(rd_payment))
+                    logger.info("Payed {} for invoice {}".format(rd_payment.amount, found.number))
+                # Payment has been deleted from RepairDesk, ask for manual sync
+                elif rd_payment is None:
+                    append_warning(
+                        order_id=rd_invoice.order_id,
+                        rd_invoice_id=str(rd_invoice.id),
+                        hd_invoice_id=found.id,
+                        message="missing payments in RepairDesk (payments deleted?)",
+                    )
+                # Payments do not match, ask for manual sync
+                elif (rd_payment.amount - hd_payment.amount) > Decimal("0.001"):
+                    append_warning(
+                        order_id=rd_invoice.order_id,
+                        rd_invoice_id=str(rd_invoice.id),
+                        hd_invoice_id=found.id,
+                        message="mismatched payment amount between Holded and RepairDesk",
+                    )
 
     # Invoice doesn't exist (create)
     else:
@@ -224,7 +224,7 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                 )
         else:
             if rebu:
-                id = hd.create_document(converted_hd_invoice)
+                id = hd.create_document(converted_hd_invoice, draft=True)
                 for payment in converted_hd_invoice.payments:
                     hd.pay_document(converted_hd_invoice.type, id, payment)
                     logger.info(

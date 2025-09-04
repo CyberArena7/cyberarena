@@ -76,6 +76,7 @@ class InvoiceStatus(Enum):
     UNPAID = "UnPaid"
     PARTIAL = "Partial"
     REFUND = "Refund"
+    OVERPAID = "OverPaid"
 
 
 @dataclass
@@ -89,7 +90,6 @@ class BasicInvoice:
     id: str
     order_id: str
     date: datetime
-    status: InvoiceStatus
     customer: BasicCustomer
 
 
@@ -219,7 +219,8 @@ class RepairDesk:
                     id=invoice["summary"]["id"],
                     order_id=invoice["summary"]["order_id"],
                     date=datetime.fromtimestamp(invoice["summary"]["created_date"]),
-                    status=InvoiceStatus(invoice["summary"]["status"]),
+                    # Sometimes RepairDesk returns no status for some reason
+                    # status=InvoiceStatus(invoice["summary"]["status"]),
                     customer=BasicCustomer(
                         id=invoice["summary"]["customer"]["id"],
                         name=invoice["summary"]["customer"]["fullName"],
