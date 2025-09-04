@@ -267,7 +267,7 @@ def sync_new_invoices(exit_event: threading.Event):
     )
 
     last_invoice = sorted(
-        invoices,
+        filter(lambda i: i.status != holded.DocumentStatus.CANCELED, invoices),
         # Kind of a hacky solution, but eh
         key=lambda d: from_numbering_series(d.number if d.number is not None else "0"),
         reverse=True,

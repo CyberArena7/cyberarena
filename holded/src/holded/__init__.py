@@ -57,9 +57,14 @@ class DocumentSort(Enum):
 
 
 class DocumentStatus(Enum):
+    # Pendiente
     UNPAID = 0
+    # Pagado
     PAID = 1
+    # Pago parcial
     PARTIALLY_PAID = 2
+    # Anulado
+    CANCELED = 3
 
 
 @dataclass
@@ -74,6 +79,7 @@ class Document:
     type: DocumentType
     id: str
     number: str
+    status: DocumentStatus
     date: datetime
     # Either the full contact or just the id
     buyer: Contact | str
@@ -144,6 +150,7 @@ class Holded:
                     type=type,
                     id=i["id"],
                     number=i["docNumber"],
+                    status=DocumentStatus(i["status"]),
                     date=datetime.fromtimestamp(i["date"]),
                     buyer=i["contact"],
                     items=list(
