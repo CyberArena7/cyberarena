@@ -174,8 +174,7 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                 new_id = hd.create_document(converted_hd_invoice)
                 for payment in converted_hd_invoice.payments:
                     hd.pay_document(converted_hd_invoice.type, new_id, payment)
-            # TODO: Holded exception
-            except Exception as e:
+            except holded.ApiError as e:
                 # TODO: Create rectificative, this requires following the chain of related documents
                 # which is not well defined through API so this is out of scope
 
@@ -185,7 +184,6 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                     rd_invoice_id=str(rd_invoice.id),
                     message="approved document is mismatched",
                 )
-                raise e
 
         # First we sync payments as approved documents still allow adding payments
         for rd_payment, hd_payment in itertools.zip_longest(
@@ -281,13 +279,23 @@ def sync_new_invoices(exit_event: threading.Event):
         _sync_invoice(invoice)
 
 
-# Syncs n invoices indiscriminately (check for updates)
-def sync_last_invoices(exit_event: threading.Event, page: int = 50):
-    logger.debug("Checking last {} invoices".format(page))
-    for idx, invoice in enumerate(reversed(rd.invoices(page_size=page))):
+# Syncs all invoice in the last `time_before` time
+def sync_last_invoices(exit_event: threading.Event, time_before: timedelta):
+    from_date = max(
+        datetime.fromtimestamp(CONFIG["only_sync_later_than"])
+        if "only_sync_later_than" in CONFIG.keys()
+        else datetime.fromtimestamp(0),
+        datetime.now() - time_before,
+    )
+    logger.debug("Checking invoices up to {}".format(from_date))
+
+    # TODO: do proper paging please...
+    invoices = rd.invoices(from_date=from_date, page_size=10000)
+
+    for idx, invoice in enumerate(reversed(invoices)):
         if exit_event.is_set():
             logger.warning(
-                "Shutting down in the middle of an invoice check, {}/{}".format(idx, page)
+                "Shutting down in the middle of an invoice check, {}/{}".format(idx, len(invoices))
             )
             break
         _sync_invoice(rd.invoice_by_id(invoice.id))

@@ -4,7 +4,12 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["flask>=3.1.1", "holded", "repairdesk"]
+dependencies = [
+    "flask>=3.1.1",
+    "holded",
+    "repairdesk",
+    "schedule>=1.2.2",
+]
 
 [tool.uv.sources]
 repairdesk = { path = "../repairdesk" }
