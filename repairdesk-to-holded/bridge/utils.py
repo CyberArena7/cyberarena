@@ -35,6 +35,9 @@ def find_holded_invoice_by_number(
         )
     )
 
+    if len(initial_search) == 0:
+        return None
+
     found = next(filter(lambda i: i.number == number, initial_search), None)
     if found is not None:
         return found
