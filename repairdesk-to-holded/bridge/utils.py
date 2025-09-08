@@ -43,18 +43,23 @@ def find_holded_invoice_by_number(
         return found
     else:
         oldest_invoice = sorted(initial_search, key=lambda i: i.date)[0]
-        while page := list(
-            filter(
-                lambda i: i.status != holded.DocumentStatus.CANCELED,
-                hd.list_documents(
-                    type=holded.DocumentType.INVOICE,
-                    contact_id=contact.id,
-                    sort=holded.DocumentSort.CREATED_DESCENDING,
-                    # TODO: Kind of an arbitrary amount of time to paginate, should be checked
-                    start=oldest_invoice.date - timedelta(days=90),
-                    end=oldest_invoice.date,
-                ),
+        while (
+            len(
+                page := list(
+                    filter(
+                        lambda i: i.status != holded.DocumentStatus.CANCELED,
+                        hd.list_documents(
+                            type=holded.DocumentType.INVOICE,
+                            contact_id=contact.id,
+                            sort=holded.DocumentSort.CREATED_DESCENDING,
+                            # TODO: Kind of an arbitrary amount of time to paginate, should be checked
+                            start=oldest_invoice.date - timedelta(days=90),
+                            end=oldest_invoice.date,
+                        ),
+                    )
+                )
             )
+            > 0
         ):
             oldest_invoice = sorted(page, key=lambda i: i.date)[0]
             found = next(filter(lambda i: i.number == number, page), None)
