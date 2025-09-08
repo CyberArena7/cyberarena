@@ -141,7 +141,6 @@ class ApiError(Exception):
 class RepairDesk:
     api_key: str
 
-    # TODO: Error handling, maybe extract data by default
     def _call(self, endpoint: str, params: dict[str, Any]) -> dict:
         try:
             ret = requests.get(
@@ -197,16 +196,11 @@ class RepairDesk:
         keyword: str | None = None,
         page_size: int = 50,
     ) -> list[BasicInvoice]:
-        if from_date is not None:
-            from_date = int(from_date.timestamp())
-        if to_date is not None:
-            to_date = int(to_date.timestamp())
-
         res = self._call(
             "/invoices",
             {
-                "from_datetime": from_date,
-                "to_datetime": to_date,
+                "from_date": int(from_date.timestamp()) if from_date is not None else None,
+                "to_date": int(to_date.timestamp()) if to_date is not None else None,
                 "status": status.value if status is not None else None,
                 "keyword": keyword,
                 "pagesize": page_size,
