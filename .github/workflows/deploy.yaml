@@ -1,0 +1,62 @@
+name: Deploy to cloud
+on: push
+jobs:
+  check-env:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Check remote server
+        run: |
+          true
+
+  holded:
+    needs: check-env
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.15"
+      - name: Package
+        run: |
+          cd holded
+          uv build
+  repairdesk:
+    needs: check-env
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.15"
+      - name: Package
+        run: |
+          cd repairdesk
+          uv build
+  repairdesk-to-holded:
+    needs: [repairdesk, holded]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Package
+        run: |
+          cd repairdesk-to-holded
+          mkdir dist
+          tar -cf dist/repairdesk-to-holded.tar *.py bridge static templates
+  purchase-order:
+    needs: repairdesk
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Package
+        run: |
+          cd purchase-order
+          mkdir dist
+          tar -cf dist/purchase-order.tar *.py providers static templates
