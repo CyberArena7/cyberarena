@@ -151,7 +151,10 @@ class RepairDesk:
             sleep(10)
             return self._call(endpoint, params)
 
-        if not ret["success"]:
+        if (
+            not ret["success"]
+            and ret["statusCode"] != 100  # Status code 100 is returned on empty invoice list
+        ):
             raise ApiError(ret["statusCode"], ret["message"])
         return ret["data"]
 
@@ -206,6 +209,10 @@ class RepairDesk:
                 "pagesize": page_size,
             },
         )
+
+        # When no invoices are found a empty list is returned
+        if type(res) is list:
+            return []
 
         invoices = []
         for invoice in res["invoiceData"]:
