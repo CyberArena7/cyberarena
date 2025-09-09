@@ -212,7 +212,7 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                         message="missing payments in RepairDesk (payments deleted?)",
                     )
                 # Payments do not match, ask for manual sync
-                elif (rd_payment.amount - hd_payment.amount) > Decimal("0.001"):
+                elif abs(rd_payment.amount - hd_payment.amount) > Decimal("0.001"):
                     append_warning(
                         order_id=rd_invoice.order_id,
                         rd_invoice_id=str(rd_invoice.id),
