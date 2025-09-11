@@ -315,3 +315,8 @@ class Holded:
                 "amount": payment.amount,
             },
         )
+
+    def send_document(self, type: DocumentType, id: str, emails: str):
+        return self._call(
+            "POST", "/documents/{}/{}/send".format(type.value, id), payload={"emails": emails}
+        )

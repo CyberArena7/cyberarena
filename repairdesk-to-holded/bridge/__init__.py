@@ -180,9 +180,13 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
             logger.info("Invoice {} is unsynced, reason: {}".format(rd_invoice.order_id, reason))
             try:
                 hd.delete_document(found)
-                new_id = hd.create_document(converted_hd_invoice)
+                new_id = hd.create_document(converted_hd_invoice, draft=draft)
                 for payment in converted_hd_invoice.payments:
                     hd.pay_document(converted_hd_invoice.type, new_id, payment)
+                if draft is False and CONFIG["send_email"]:
+                    hd.send_document(
+                        converted_hd_invoice.type, new_id, converted_hd_invoice.buyer.email
+                    )
             except holded.ApiError as e:
                 # TODO: Create rectificative, this requires following the chain of related documents
                 # which is not well defined through API so this is out of scope
@@ -231,6 +235,8 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                 logger.info(
                     "Payed invoice {} with amount {}".format(rd_invoice.order_id, payment.amount)
                 )
+            if CONFIG["send_email"]:
+                hd.send_document(converted_hd_invoice.type, id, converted_hd_invoice.buyer.email)
         else:
             if rebu:
                 id = hd.create_document(converted_hd_invoice, draft=True)
