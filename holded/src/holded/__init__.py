@@ -117,7 +117,11 @@ class Holded:
                 json=payload,
                 params=params,
             )
-            return ret.json()
+            body = ret.json()
+            if type(body) is dict and "status" in body.keys() and body["status"] != 1:
+                raise ApiError(body.get("info", "no info associated"))
+            else:
+                return body
         except Exception as e:
             logger.error("Error on request {}".format(e))
             sleep(10)
@@ -223,15 +227,11 @@ class Holded:
             "/documents/{}".format(document.type.value),
             payload=payload,
         )
-        if ret["status"] != 1:
-            raise ApiError(ret["info"])
         return ret["id"]
 
     def delete_document(self, document: Document):
         assert document.id is not None
-        ret = self._call("DELETE", "/documents/{}/{}".format(document.type.value, document.id))
-        if ret["status"] != 1:
-            raise ApiError(info=ret["info"])
+        self._call("DELETE", "/documents/{}/{}".format(document.type.value, document.id))
 
     def _into_contact(self, response: dict[str, Any]):
         return Contact(
