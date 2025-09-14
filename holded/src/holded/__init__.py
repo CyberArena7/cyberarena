@@ -106,6 +106,7 @@ class Holded:
         payload: dict[str, Any] | None = None,
     ) -> dict | list:
         try:
+            logger.debug(endpoint)
             ret = requests.request(
                 method,
                 BASE_URL + endpoint,
@@ -117,15 +118,16 @@ class Holded:
                 json=payload,
                 params=params,
             )
+            logger.debug(ret)
             body = ret.json()
-            if type(body) is dict and "status" in body.keys() and body["status"] != 1:
-                raise ApiError(body.get("info", "no info associated"))
-            else:
-                return body
         except Exception as e:
             logger.error("Error on request {}".format(e))
             sleep(10)
             return self._call(method=method, endpoint=endpoint, params=params, payload=payload)
+        if type(body) is dict and "status" in body.keys() and body["status"] != 1:
+            raise ApiError(body.get("info", "no info associated"))
+        else:
+            return body
 
     def list_documents(
         self,
