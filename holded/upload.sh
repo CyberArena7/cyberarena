@@ -1,6 +1,15 @@
-#!/bin/sh
+#!/usr/bin/env sh
+set -euo pipefail
+
+SCP=${SCP:-scp}         # permite inyectar opciones (puerto) desde el workflow
+SSH=${SSH:-ssh}
+
 uv build
 cd dist
-NAME=(holded-*-py3-none-any.whl)
-scp $NAME "$1:/tmp"
-ssh $1 sudo pip3 install --no-deps --break-system-packages --force-reinstall /tmp/$NAME
+
+# captura el wheel generado
+NAME=$(echo holded-*-py3-none-any.whl)
+
+"$SCP" "$NAME" "$1:/tmp"
+"$SSH" "$1" "sudo pip3 install --no-deps --break-system-packages --force-reinstall /tmp/$NAME"
+
