@@ -1,62 +1,91 @@
 name: Deploy to cloud
 on: push
-jobs:
-  check-env:
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Check remote server
-        run: |
-          true
 
-  holded:
-    needs: check-env
+jobs:
+  build:
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      # Instalamos uv por si algún upload.sh compila paquete dentro
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
           version: "0.8.15"
-      - name: Package
+          
+      - name: Pre-build holded
         run: |
-          cd holded
-          uv build
-  repairdesk:
-    needs: check-env
+          if [ -d holded ]; then
+            cd holded && uv build || true
+          fi
+      - name: Pre-build repairdesk
+        run: |
+          if [ -d repairdesk ]; then
+            cd repairdesk && uv build || true
+          fi
+      - name: Pre-pack purchase-order
+        run: |
+          if [ -d purchase-order ]; then
+            cd purchase-order
+            mkdir -p dist
+            tar -cf dist/purchase-order.tar *.py providers static templates || true
+          fi
+      - name: Pre-pack repairdesk-to-holded
+        run: |
+          if [ -d repairdesk-to-holded ]; then
+            cd repairdesk-to-holded
+            mkdir -p dist
+            tar -cf dist/repairdesk-to-holded.tar *.py bridge static templates || true
+          fi
+      - name: Pre-pack trade-in
+        run: |
+          if [ -d trade-in ]; then
+            cd trade-in
+            mkdir -p dist
+            tar -cf dist/trade-in.tar *.py static templates || true
+          fi
+
+  deploy:
+    needs: build
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        app:
+          - holded
+          - repairdesk
+          - purchase-order
+          - repairdesk-to-holded
+          - trade-in
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v4
+
+      - name: Set up SSH agent (deploy key)
+        uses: webfactory/ssh-agent@v0.9.0
         with:
-          version: "0.8.15"
-      - name: Package
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add server to known_hosts
         run: |
-          cd repairdesk
-          uv build
-  repairdesk-to-holded:
-    needs: [repairdesk, holded]
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Package
+          mkdir -p ~/.ssh
+          if [ -z "${{ secrets.SERVER_PORT }}" ]; then
+            ssh-keyscan -H "${{ secrets.SERVER_HOST }}" >> ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "${{ secrets.SERVER_PORT }}" -H "${{ secrets.SERVER_HOST }}" >> ~/.ssh/known_hosts
+          fi
+
+      - name: Ensure upload.sh is executable
         run: |
-          cd repairdesk-to-holded
-          mkdir dist
-          tar -cf dist/repairdesk-to-holded.tar *.py bridge static templates
-  purchase-order:
-    needs: repairdesk
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Package
+          chmod +x "${{ matrix.app }}/upload.sh"
+
+      - name: Deploy ${{ matrix.app }}
+        env:
+          SERVER_ADDR: ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
         run: |
-          cd purchase-order
-          mkdir dist
-          tar -cf dist/purchase-order.tar *.py providers static templates
+          # Si hay puerto personalizado, inyectamos opciones a scp/ssh
+          if [ -n "${SERVER_PORT}" ]; then
+            export SCP="scp -P ${SERVER_PORT}"
+            export SSH="ssh -p ${SERVER_PORT}"
+          fi
+          ./${{ matrix.app }}/upload.sh "$SERVER_ADDR"
