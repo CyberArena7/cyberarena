@@ -40,35 +40,62 @@ CLOSED_STATUS_LIST = list(
 
 # Finds (and updates if needed) a contact or creates it
 def _sync_contact(contact: holded.Contact) -> holded.Contact:
+
+    def _set_if_value(dst, src, attr) -> bool:
+        val = getattr(src, attr, None)
+        if val is not None and getattr(dst, attr, None) != val:
+            setattr(dst, attr, val)
+            return True
+        return False
+
+    def _merge_address(dst, src) -> bool:
+        changed = False
+        src_addresses = getattr(src, "addresses", None)
+        if isinstance(src_addresses, list) and len(src_addresses) > 0:
+            if getattr(dst, "addresses", None) != src_addresses:
+                setattr(dst, "addresses", src_addresses)
+                changed = True
+
+        for fld in ("address", "city", "province", "zipcode", "country"):
+            if hasattr(dst, fld) or hasattr(src, fld):
+                if _set_if_value(dst, src, fld):
+                    changed = True
+
+        return changed
+
     found = None
 
     if contact.custom_id is not None:
         found = hd.get_contact_by_custom_id(contact.custom_id)
-    elif found is None and contact.mobile is not None:
+    elif contact.mobile is not None:
         found = hd.get_contact_by_mobile(contact.mobile)
 
     if found is not None:
-        if (
-            contact.name != found.name
-            or contact.nif != found.nif
-            or contact.email != found.email
-            or contact.mobile != found.mobile
-            or contact.isperson != found.isperson
-        ):
+        changed = False
+
+      
+        for fld in ("name", "nif", "email", "mobile", "isperson"):
+            if _set_if_value(found, contact, fld):
+                changed = True
+
+        
+        if _merge_address(found, contact):
+            changed = True
+
+        if changed:
             logger.info(
                 "Customer {} (id: {}) has been changed on RepairDesk, syncing changes".format(
                     contact.name, contact.custom_id
                 )
             )
             contact.id = found.id
-            hd.update_contact(contact)
-            found = contact
-    else:
-        logging.info("Creating new customer {} (id: {})".format(contact.name, contact.id))
-        id = hd.create_contact(contact=contact)
-        found = hd.get_contact_by_id(id)
-        assert found is not None
-
+            hd.update_contact(found)
+        return found
+    
+    logging.info("Creating new customer {} (id: {})".format(contact.name, contact.id))
+    new_id = hd.create_contact(contact=contact)
+    found = hd.get_contact_by_id(new_id)
+    assert found is not None
     return found
 
 
