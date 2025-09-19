@@ -1,6 +1,8 @@
 #!/usr/bin/env sh
 set -eu
 
+cd "$(dirname "$0")"
+
 SCP=${SCP:-scp}
 SSH=${SSH:-ssh}
 
