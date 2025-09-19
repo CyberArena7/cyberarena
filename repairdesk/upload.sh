@@ -2,6 +2,7 @@
 set -eu
 
 cd "$(dirname "$0")"
+uv build -C .
 
 SCP=${SCP:-scp}
 SSH=${SSH:-ssh}
