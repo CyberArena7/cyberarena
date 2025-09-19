@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-set -euo pipefail
+set -eu
 
 SCP=${SCP:-scp}         # permite inyectar opciones (puerto) desde el workflow
 SSH=${SSH:-ssh}
