@@ -1,6 +1,8 @@
 #!/usr/bin/env sh
 set -eu
 
+cd "$(dirname "$0")"
+
 SCP=${SCP:-scp}         # permite inyectar opciones (puerto) desde el workflow
 SSH=${SSH:-ssh}
 
