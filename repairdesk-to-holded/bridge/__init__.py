@@ -40,7 +40,6 @@ CLOSED_STATUS_LIST = list(
 
 # Finds (and updates if needed) a contact or creates it
 def _sync_contact(contact: holded.Contact) -> holded.Contact:
-
     def _set_if_value(dst, src, attr) -> bool:
         val = getattr(src, attr, None)
         if val is not None and getattr(dst, attr, None) != val:
@@ -48,50 +47,129 @@ def _sync_contact(contact: holded.Contact) -> holded.Contact:
             return True
         return False
 
+    def _maybe_set(obj, attr, val) -> bool:
+        if val is not None and getattr(obj, attr, None) != val:
+            setattr(obj, attr, val)
+            return True
+        return False
+
     def _merge_address(dst, src) -> bool:
         changed = False
+
+       
         src_addresses = getattr(src, "addresses", None)
         if isinstance(src_addresses, list) and len(src_addresses) > 0:
             if getattr(dst, "addresses", None) != src_addresses:
                 setattr(dst, "addresses", src_addresses)
                 changed = True
 
-        for fld in ("address", "city", "province", "zipcode", "country"):
+       
+        for fld in ("address", "city", "province", "zipcode", "postal_code", "country"):
             if hasattr(dst, fld) or hasattr(src, fld):
                 if _set_if_value(dst, src, fld):
                     changed = True
-
         return changed
 
-    found = None
+ 
+    try:
+        need_email = getattr(contact, "email", None) in (None, "")
+        need_addr = True
+       
+        flat_vals = [getattr(contact, f, None) for f in ("address", "city", "province", "zipcode", "postal_code", "country")]
+        has_flat_addr = any(v not in (None, "") for v in flat_vals)
+        has_list_addr = isinstance(getattr(contact, "addresses", None), list) and len(getattr(contact, "addresses", [])) > 0
+        need_addr = not (has_flat_addr or has_list_addr)
 
-    if contact.custom_id is not None:
+        if (need_email or need_addr) and getattr(contact, "custom_id", None):
+            
+            rd_customer = None
+            
+            for fn in ("customer_by_id", "get_customer_by_id", "customer"):
+                if hasattr(rd, fn):
+                    try:
+                        rd_customer = getattr(rd, fn)(contact.custom_id)
+                        break
+                    except Exception:
+                        rd_customer = None
+            if rd_customer is not None:
+                # Email
+                if need_email:
+                    _maybe_set(contact, "email", getattr(rd_customer, "email", None))
+
+                # Dirección: intentamos varias ubicaciones comunes en RD
+                def pick(*paths):
+                    for p in paths:
+                        val = None
+                        try:
+                            val = getattr(rd_customer, p, None)
+                        except Exception:
+                            val = None
+                        if val:
+                            return val
+                    return None
+
+                
+                billing = getattr(rd_customer, "billing_address", None) or {}
+                shipping = getattr(rd_customer, "shipping_address", None) or {}
+
+                street = pick("address") or getattr(billing, "address", None) or getattr(shipping, "address", None) or (billing.get("address") if isinstance(billing, dict) else None) or (shipping.get("address") if isinstance(shipping, dict) else None)
+                city = pick("city") or getattr(billing, "city", None) or getattr(shipping, "city", None) or (billing.get("city") if isinstance(billing, dict) else None) or (shipping.get("city") if isinstance(shipping, dict) else None)
+                province = pick("state") or getattr(billing, "state", None) or getattr(shipping, "state", None) or (billing.get("state") if isinstance(billing, dict) else None) or (shipping.get("state") if isinstance(shipping, dict) else None)
+                zipcode = pick("zip") or getattr(billing, "zip", None) or getattr(shipping, "zip", None) or (billing.get("zip") if isinstance(billing, dict) else None) or (shipping.get("zip") if isinstance(shipping, dict) else None)
+                country = pick("country") or getattr(billing, "country", None) or getattr(shipping, "country", None) or (billing.get("country") if isinstance(billing, dict) else None) or (shipping.get("country") if isinstance(shipping, dict) else None)
+
+                
+                if need_addr and hasattr(contact, "addresses"):
+                    addr = {
+                        "type": "billing",
+                        "street": street,
+                        "city": city,
+                        "province": province,
+                        "zip": zipcode,
+                        "country": country,
+                    }
+                   
+                    addr = {k: v for k, v in addr.items() if v not in (None, "")}
+                    if addr:
+                        contact.addresses = [addr]
+                else:
+                   
+                    _maybe_set(contact, "address", street)
+                    _maybe_set(contact, "city", city)
+                    
+                    _maybe_set(contact, "province", province)
+                    _maybe_set(contact, "zipcode", zipcode)
+                    _maybe_set(contact, "postal_code", zipcode)
+                    _maybe_set(contact, "country", country)
+    except Exception as _e:
+       
+        logger.debug(f"Could not enrich contact from RepairDesk: {type(_e).__name__}: {_e}")
+
+ 
+    found = None
+    if getattr(contact, "custom_id", None) is not None:
         found = hd.get_contact_by_custom_id(contact.custom_id)
-    elif contact.mobile is not None:
+    elif getattr(contact, "mobile", None) is not None:
         found = hd.get_contact_by_mobile(contact.mobile)
 
     if found is not None:
         changed = False
-
-      
         for fld in ("name", "nif", "email", "mobile", "isperson"):
             if _set_if_value(found, contact, fld):
                 changed = True
-
-        
         if _merge_address(found, contact):
             changed = True
 
         if changed:
             logger.info(
                 "Customer {} (id: {}) has been changed on RepairDesk, syncing changes".format(
-                    contact.name, contact.custom_id
+                    contact.name, getattr(contact, "custom_id", None)
                 )
             )
             contact.id = found.id
             hd.update_contact(found)
         return found
-    
+
     logging.info("Creating new customer {} (id: {})".format(contact.name, contact.id))
     new_id = hd.create_contact(contact=contact)
     found = hd.get_contact_by_id(new_id)
