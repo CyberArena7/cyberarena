@@ -132,31 +132,35 @@ def append_warning(
             json.dump(list(map(dataclasses.asdict, warns)), warn_file)
 
 
-# Converts a RepairDesk customer into a Holded contact
 def convert_customer(customer: repairdesk.Customer) -> holded.Contact:
-    customer.full_name = customer.full_name.strip()
+    full_name = (customer.full_name or "").strip()
 
-    # NIF
-    if customer.full_name == "CLIENTE SIN ALTA":
+ 
+    def _norm_nif(v):
+        if not v:
+            return None
+        v = str(v).strip().upper().replace(" ", "").replace("-", "")
+        return v if v and v not in ("-", "NA", "N/A", "0") else None
+
+    nif = _norm_nif(getattr(customer, "nif", None))
+    if full_name == "CLIENTE SIN ALTA":
         nif = None
-    elif customer.nif is not None and (customer.nif == "-" or len(customer.nif) == 0):
-        nif = None
-    else:
-        nif = customer.nif
 
-    # Email
-    email = (customer.email or "").strip().lower() or None
-
-    # Móvil
-    mobile = (customer.mobile or "").strip() or None
+   
+    email = (getattr(customer, "email", "") or "").strip().lower() or None
+    mobile = (
+        (getattr(customer, "mobile", "") or "").strip()
+        or (getattr(customer, "phone", "") or "").strip()
+        or None
+    )
 
     isperson = not CONFIG["customer_group_is_business"][customer.customer_group_id]
 
-    # 1) Creamos el contacto básico (igual que antes)
+  
     contact = holded.Contact(
         id=None,
         custom_id=customer.id,
-        name=customer.full_name,
+        name=full_name,
         email=email,
         mobile=mobile,
         phone=None,
@@ -165,8 +169,7 @@ def convert_customer(customer: repairdesk.Customer) -> holded.Contact:
         isperson=isperson,
     )
 
-    # 2) Enriquecemos dirección (sin romper si el SDK cambia nombres)
-    # Intentamos primero billing/shipping como objetos o dicts
+    
     billing = getattr(customer, "billing_address", None) or {}
     shipping = getattr(customer, "shipping_address", None) or {}
 
@@ -208,36 +211,41 @@ def convert_customer(customer: repairdesk.Customer) -> holded.Contact:
         or None
     )
 
-    # Si tu SDK de Holded soporta lista de direcciones, úsala:
+    
+    if not zipcode and street:
+        import re
+        m = re.search(r"(\d{5})\b", street)
+        if m:
+            zipcode = m.group(1)
+
+    if not city and street:
+        parts = [p.strip() for p in street.split(",") if p.strip()]
+        if len(parts) >= 2:
+          
+            city = parts[-2]
+
+   
     addr = {
         "type": "billing",
         "street": street,
         "city": city,
         "province": province,
         "zip": zipcode,
-        "country": country,
+        "country": country or "ES",
     }
-    addr = {k: v for k, v in addr.items() if v}  # elimina vacíos
+    addr = {k: v for k, v in addr.items() if v}
 
-    if addr:
-        # Preferimos addresses[] si existe en el modelo
-        if hasattr(contact, "addresses"):
-            setattr(contact, "addresses", [addr])
-        else:
-            # Si no existe addresses[], probamos a rellenar campos planos si los hubiera
-            if hasattr(contact, "address"):
-                contact.address = street
-            if hasattr(contact, "city"):
-                contact.city = city
-            if hasattr(contact, "province"):
-                contact.province = province
-            # algunos SDKs usan zipcode o postal_code
-            if hasattr(contact, "zipcode"):
-                contact.zipcode = zipcode
-            if hasattr(contact, "postal_code"):
-                contact.postal_code = zipcode
-            if hasattr(contact, "country"):
-                contact.country = country
+    
+    if addr and hasattr(contact, "addresses"):
+        contact.addresses = [addr]
+
+   
+    if hasattr(contact, "address"):      contact.address = street
+    if hasattr(contact, "city"):         contact.city = city
+    if hasattr(contact, "province"):     contact.province = province
+    if hasattr(contact, "zipcode"):      contact.zipcode = zipcode
+    if hasattr(contact, "postal_code"):  contact.postal_code = zipcode
+    if hasattr(contact, "country"):      contact.country = country or "ES"
 
     return contact
 
