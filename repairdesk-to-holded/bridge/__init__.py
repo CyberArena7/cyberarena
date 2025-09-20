@@ -38,89 +38,67 @@ CLOSED_STATUS_LIST = list(
 )
 
 
+def _addr_tuple(c):
+
+    return (
+        getattr(c, "address", None) or getattr(c, "street", None),
+        getattr(c, "city", None),
+        getattr(c, "province", None) or getattr(c, "state", None),
+        getattr(c, "zipcode", None) or getattr(c, "postal_code", None) or getattr(c, "zip", None),
+        getattr(c, "country", None),
+    )
+
+
+def _ship_addr_tuple(c):
+    return (
+        getattr(c, "shipping_address", None) or getattr(c, "shipping_street", None),
+        getattr(c, "shipping_city", None),
+        getattr(c, "shipping_province", None) or getattr(c, "shipping_state", None),
+        getattr(c, "shipping_zipcode", None)
+        or getattr(c, "shipping_postal_code", None)
+        or getattr(c, "shipping_zip", None),
+        getattr(c, "shipping_country", None),
+    )
+
 def _sync_contact(contact: holded.Contact) -> holded.Contact:
-    
-    def _set_if_value(dst, src, attr) -> bool:
-        val = getattr(src, attr, None)
-        if val is not None and getattr(dst, attr, None) != val:
-            setattr(dst, attr, val)
-            return True
-        return False
-
-    def _merge_address(dst, src) -> bool:
-        changed = False
-        
-        src_addresses = getattr(src, "addresses", None)
-        if isinstance(src_addresses, list) and len(src_addresses) > 0:
-            if getattr(dst, "addresses", None) != src_addresses:
-                setattr(dst, "addresses", src_addresses)
-                changed = True
-       
-        for fld in ("address", "city", "province", "zipcode", "postal_code", "country"):
-            if hasattr(dst, fld) or hasattr(src, fld):
-                if _set_if_value(dst, src, fld):
-                    changed = True
-        return changed
-
-    def _strip_address_fields(obj):
-        
-        for fld in ("addresses", "address", "city", "province", "zipcode", "postal_code", "country"):
-            if hasattr(obj, fld):
-                try:
-                    delattr(obj, fld)
-                except Exception:
-                    try:
-                        setattr(obj, fld, None)
-                    except Exception:
-                        pass
-
     found = None
 
-    if getattr(contact, "custom_id", None) is not None:
+   
+    if contact.custom_id is not None:
         found = hd.get_contact_by_custom_id(contact.custom_id)
-    elif getattr(contact, "mobile", None) is not None:
+    if found is None and contact.mobile is not None:
         found = hd.get_contact_by_mobile(contact.mobile)
 
-   
     if found is not None:
-        changed = False
-        for fld in ("name", "nif", "email", "mobile", "isperson"):
-            if _set_if_value(found, contact, fld):
-                changed = True
-        if _merge_address(found, contact):
-            changed = True
+        
+        need_update = (
+            (contact.name or "") != (found.name or "")
+            or (contact.nif or "") != (found.nif or "")
+            or (contact.email or "") != (found.email or "")
+            or (contact.mobile or "") != (found.mobile or "")
+            or bool(contact.isperson) != bool(getattr(found, "isperson", False))
+            or _addr_tuple(contact) != _addr_tuple(found)
+            or _ship_addr_tuple(contact) != _ship_addr_tuple(found)
+        )
 
-        if changed:
+        if need_update:
             logger.info(
-                "Customer {} (id: {}) has been changed on RepairDesk, syncing changes".format(
-                    getattr(contact, "name", None), getattr(contact, "custom_id", None)
-                )
+                "Customer %s (id: %s) changed; syncing address/info to Holded",
+                contact.name,
+                contact.custom_id,
             )
             contact.id = found.id
-            
-            try:
-                hd.update_contact(found)
-            except Exception as e:
-                logger.warning("Holded rechazó update_contact con dirección (%s). Reintentando sin dirección...", e)
-                safe = found
-                _strip_address_fields(safe)
-                hd.update_contact(safe)
-        return found
+            hd.update_contact(contact)
+            return contact
+        else:
+            return found
 
-   
-    logging.info("Creating new customer {} (id: {})".format(contact.name, getattr(contact, "id", None)))
-    try:
-        new_id = hd.create_contact(contact=contact)
-    except Exception as e:
-        logger.warning("Holded rechazó create_contact con dirección (%s). Reintentando sin dirección...", e)
-        safe_contact = contact
-        _strip_address_fields(safe_contact)
-        new_id = hd.create_contact(contact=safe_contact)
 
+    logging.info("Creating new customer %s (id: %s)", contact.name, contact.id)
+    new_id = hd.create_contact(contact=contact)
     found = hd.get_contact_by_id(new_id)
     assert found is not None
     return found
-
 
 # Creates or updates an invoice as needed
 def _sync_invoice(rd_invoice: repairdesk.Invoice):
