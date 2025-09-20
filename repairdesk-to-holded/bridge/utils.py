@@ -136,6 +136,7 @@ def append_warning(
 def convert_customer(customer: repairdesk.Customer) -> holded.Contact:
     customer.full_name = customer.full_name.strip()
 
+    # NIF
     if customer.full_name == "CLIENTE SIN ALTA":
         nif = None
     elif customer.nif is not None and (customer.nif == "-" or len(customer.nif) == 0):
@@ -143,20 +144,16 @@ def convert_customer(customer: repairdesk.Customer) -> holded.Contact:
     else:
         nif = customer.nif
 
-    if customer.email == "":
-        email = None
-    else:
-        email = customer.email.lower()
+    # Email
+    email = (customer.email or "").strip().lower() or None
 
-    if customer.mobile == "":
-        mobile = None
-    else:
-        mobile = customer.mobile
+    # Móvil
+    mobile = (customer.mobile or "").strip() or None
 
     isperson = not CONFIG["customer_group_is_business"][customer.customer_group_id]
 
-    # TODO: differentiate between business and person
-    return holded.Contact(
+    # 1) Creamos el contacto básico (igual que antes)
+    contact = holded.Contact(
         id=None,
         custom_id=customer.id,
         name=customer.full_name,
@@ -167,6 +164,82 @@ def convert_customer(customer: repairdesk.Customer) -> holded.Contact:
         type="client",
         isperson=isperson,
     )
+
+    # 2) Enriquecemos dirección (sin romper si el SDK cambia nombres)
+    # Intentamos primero billing/shipping como objetos o dicts
+    billing = getattr(customer, "billing_address", None) or {}
+    shipping = getattr(customer, "shipping_address", None) or {}
+
+    def _get(obj, key):
+        if hasattr(obj, key):
+            return getattr(obj, key)
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return None
+
+    street = (
+        (getattr(customer, "address", None) or "").strip()
+        or (str(_get(billing, "address") or "").strip())
+        or (str(_get(shipping, "address") or "").strip())
+        or None
+    )
+    city = (
+        (getattr(customer, "city", None) or "").strip()
+        or (str(_get(billing, "city") or "").strip())
+        or (str(_get(shipping, "city") or "").strip())
+        or None
+    )
+    province = (
+        (getattr(customer, "state", None) or "").strip()
+        or (str(_get(billing, "state") or "").strip())
+        or (str(_get(shipping, "state") or "").strip())
+        or None
+    )
+    zipcode = (
+        (getattr(customer, "zip", None) or "").strip()
+        or (str(_get(billing, "zip") or "").strip())
+        or (str(_get(shipping, "zip") or "").strip())
+        or None
+    )
+    country = (
+        (getattr(customer, "country", None) or "").strip()
+        or (str(_get(billing, "country") or "").strip())
+        or (str(_get(shipping, "country") or "").strip())
+        or None
+    )
+
+    # Si tu SDK de Holded soporta lista de direcciones, úsala:
+    addr = {
+        "type": "billing",
+        "street": street,
+        "city": city,
+        "province": province,
+        "zip": zipcode,
+        "country": country,
+    }
+    addr = {k: v for k, v in addr.items() if v}  # elimina vacíos
+
+    if addr:
+        # Preferimos addresses[] si existe en el modelo
+        if hasattr(contact, "addresses"):
+            setattr(contact, "addresses", [addr])
+        else:
+            # Si no existe addresses[], probamos a rellenar campos planos si los hubiera
+            if hasattr(contact, "address"):
+                contact.address = street
+            if hasattr(contact, "city"):
+                contact.city = city
+            if hasattr(contact, "province"):
+                contact.province = province
+            # algunos SDKs usan zipcode o postal_code
+            if hasattr(contact, "zipcode"):
+                contact.zipcode = zipcode
+            if hasattr(contact, "postal_code"):
+                contact.postal_code = zipcode
+            if hasattr(contact, "country"):
+                contact.country = country
+
+    return contact
 
 
 def convert_document(
