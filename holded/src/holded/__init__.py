@@ -1,44 +1,53 @@
 from dataclasses import dataclass
 from enum import Enum
 import logging
-from typing import Any
+from typing import Any, Optional, Dict
 import requests
 from datetime import datetime
 from time import sleep
 from decimal import Decimal
 
 # Docs: https://developers.holded.com/reference
-
-# TODO: Error handling
 BASE_URL = "https://api.holded.com/api/invoicing/v1"
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
-# TODO: convert into an enum with all possible errors
 @dataclass
 class ApiError(Exception):
     info: str
 
 
 @dataclass
+class BillingAddress:
+    street: Optional[str] = None
+    city: Optional[str] = None
+    region: Optional[str] = None     
+    zip: Optional[str] = None
+    country: Optional[str] = None     
+
+
+@dataclass
 class Contact:
-    id: str
-    custom_id: str
+    id: Optional[str]
+    custom_id: Optional[str]
     name: str
-    nif: str | None
-    email: str | None
-    phone: str | None
-    mobile: str | None
+    nif: Optional[str]
+    email: Optional[str]
+    phone: Optional[str]
+    mobile: Optional[str]
     type: str
     isperson: bool
+    # NUEVO: direcciones nativas de Holded
+    billing_address: Optional[BillingAddress] = None
+    shipping_address: Optional[BillingAddress] = None
 
 
 @dataclass
 class Item:
     name: str
-    desc: str | None
+    desc: Optional[str]
     units: int
     subtotal: Decimal
     discount: Decimal
@@ -57,41 +66,36 @@ class DocumentSort(Enum):
 
 
 class DocumentStatus(Enum):
-    # Pendiente
     UNPAID = 0
-    # Pagado
     PAID = 1
-    # Pago parcial
     PARTIALLY_PAID = 2
-    # Anulado
     CANCELED = 3
 
 
 @dataclass
 class Payment:
     date: datetime
-    desc: str | None
+    desc: Optional[str]
     amount: Decimal
 
 
 @dataclass
 class Document:
     type: DocumentType
-    id: str
-    number: str
-    status: DocumentStatus
+    id: Optional[str]
+    number: Optional[str]
+    status: Optional[DocumentStatus]
     date: datetime
-    # Either the full contact or just the id
     buyer: Contact | str
     items: list[Item]
-    custom_fields: dict[str, str] | None
+    custom_fields: Optional[dict[str, str]]
     tags: list[str]
-    notes: str | None
-    numbering_series_id: str | None
+    notes: Optional[str]
+    numbering_series_id: Optional[str]
     payments: list[Payment]
-    total: Decimal
-    paid: Decimal
-    pending: Decimal
+    total: Optional[Decimal]
+    paid: Optional[Decimal]
+    pending: Optional[Decimal]
 
 
 @dataclass(frozen=True)
@@ -102,11 +106,11 @@ class Holded:
         self,
         method: str,
         endpoint: str,
-        params: dict[str, Any] | None = None,
-        payload: dict[str, Any] | None = None,
+        params: Optional[dict[str, Any]] = None,
+        payload: Optional[dict[str, Any]] = None,
     ) -> dict | list:
         try:
-            logger.debug(endpoint)
+            logger.debug("%s %s", method, endpoint)
             ret = requests.request(
                 method,
                 BASE_URL + endpoint,
@@ -117,17 +121,19 @@ class Holded:
                 },
                 json=payload,
                 params=params,
+                timeout=30,
             )
-            logger.debug(ret)
             body = ret.json()
         except Exception as e:
-            logger.error("Error on request {}".format(e))
-            sleep(10)
+            logger.error("Error on request %s %s: %s", method, endpoint, e)
+            sleep(5)
             return self._call(method=method, endpoint=endpoint, params=params, payload=payload)
-        if type(body) is dict and "status" in body.keys() and body["status"] != 1:
-            raise ApiError(body.get("info", "no info associated"))
-        else:
-            return body
+
+        # API moderna: cuando hay "status" y != 1, es error
+        if isinstance(body, dict) and body.get("status") not in (None, 1):
+            raise ApiError(body.get("info", "Holded API error"))
+        return body
+
 
     def list_documents(
         self,
@@ -140,82 +146,73 @@ class Holded:
     ) -> list[Document]:
         ret = self._call(
             "GET",
-            "/documents/{}".format(type.value),
+            f"/documents/{type.value}",
             params={
-                "starttmp": start.timestamp() if start is not None else None,
-                "endtmp": end.timestamp() if end is not None else None,
+                "starttmp": int(start.timestamp()) if start is not None else None,
+                "endtmp": int(end.timestamp()) if end is not None else None,
                 "contactId": contact_id,
                 "sort": sort.value if sort is not None else None,
                 "paid": paid.value if paid is not None else None,
             },
         )
 
-        return list(
-            map(
-                lambda i: Document(
-                    type=type,
-                    id=i["id"],
-                    number=i["docNumber"],
-                    status=DocumentStatus(i["status"]),
-                    date=datetime.fromtimestamp(i["date"]),
-                    buyer=i["contact"],
-                    items=list(
-                        map(
-                            lambda p: Item(
-                                name=p["name"],
-                                desc=p["desc"],
-                                units=p["units"],
-                                taxes=p["taxes"],
-                                subtotal=Decimal(p["price"]),
-                                discount=Decimal(p["discount"]),
-                                tax_percentage=Decimal(p["tax"]),
-                            ),
-                            i["products"],
-                        )
-                    ),
-                    tags=i["tags"],
-                    custom_fields=None,
-                    # There's no trivial way to get this
-                    numbering_series_id=None,
-                    notes=i["notes"],
-                    payments=list(
-                        map(
-                            lambda p: Payment(
-                                date=datetime.fromtimestamp(p["date"]),
-                                amount=Decimal(p["amount"]),
-                                desc=None,
-                            ),
-                            # Uhh, pretty weird that this is needed but ok
-                            i.get("paymentsDetail", []),
-                        )
-                    ),
-                    total=Decimal(i["total"]),
-                    paid=Decimal(i["paymentsTotal"]),
-                    pending=Decimal(i["paymentsPending"]),
-                ),
-                ret,
+        return [
+            Document(
+                type=type,
+                id=i.get("id"),
+                number=i.get("docNumber"),
+                status=DocumentStatus(i["status"]) if "status" in i else None,
+                date=datetime.fromtimestamp(i["date"]),
+                buyer=i["contact"],
+                items=[
+                    Item(
+                        name=p["name"],
+                        desc=p.get("desc"),
+                        units=p["units"],
+                        taxes=p.get("taxes", []),
+                        subtotal=Decimal(str(p["price"])),
+                        discount=Decimal(str(p.get("discount", 0))),
+                        tax_percentage=Decimal(str(p.get("tax", 0))),
+                    )
+                    for p in i.get("products", [])
+                ],
+                tags=i.get("tags", []),
+                custom_fields=None,
+                numbering_series_id=None,
+                notes=i.get("notes"),
+                payments=[
+                    Payment(
+                        date=datetime.fromtimestamp(p["date"]),
+                        amount=Decimal(str(p["amount"])),
+                        desc=None,
+                    )
+                    for p in i.get("paymentsDetail", [])
+                ],
+                total=Decimal(str(i["total"])) if "total" in i else None,
+                paid=Decimal(str(i.get("paymentsTotal", 0))),
+                pending=Decimal(str(i.get("paymentsPending", 0))),
             )
-        )
+            for i in ret
+        ]
 
     def create_document(self, document: Document, draft: bool = True) -> str:
+        assert isinstance(document.buyer, Contact) and document.buyer.id, "buyer.id requerido"
         payload = {
             "language": "es",
             "contactId": document.buyer.id,
             "date": int(document.date.timestamp()),
-            "items": list(
-                map(
-                    lambda i: {
-                        "name": i.name,
-                        "desc": i.desc,
-                        "units": i.units,
-                        "subtotal": i.subtotal,
-                        "discount": i.discount,
-                        "tax": i.tax_percentage,
-                        "taxes": i.taxes,
-                    },
-                    document.items,
-                )
-            ),
+            "items": [
+                {
+                    "name": i.name,
+                    "desc": i.desc,
+                    "units": i.units,
+                    "subtotal": float(i.subtotal),
+                    "discount": float(i.discount),
+                    "tax": float(i.tax_percentage),
+                    "taxes": i.taxes,
+                }
+                for i in document.items
+            ],
             "invoiceNum": document.number,
             "currency": "eur",
             "currencyChange": 1,
@@ -224,45 +221,54 @@ class Holded:
             "notes": document.notes,
             "approveDoc": not draft,
         }
-        ret = self._call(
-            "POST",
-            "/documents/{}".format(document.type.value),
-            payload=payload,
-        )
+        ret = self._call("POST", f"/documents/{document.type.value}", payload=payload)
         return ret["id"]
 
     def delete_document(self, document: Document):
         assert document.id is not None
-        self._call("DELETE", "/documents/{}/{}".format(document.type.value, document.id))
+        self._call("DELETE", f"/documents/{document.type.value}/{document.id}")
 
-    def _into_contact(self, response: dict[str, Any]):
+ 
+
+    def _into_contact(self, response: dict[str, Any]) -> Contact:
+       
+        nif = response.get("nif", response.get("code"))
+      
+        def into_addr(obj: Optional[Dict[str, Any]]) -> Optional[BillingAddress]:
+            if not obj:
+                return None
+            return BillingAddress(
+                street=obj.get("street"),
+                city=obj.get("city"),
+                region=obj.get("region"),
+                zip=obj.get("zip"),
+                country=obj.get("country"),
+            )
+
         return Contact(
-            id=response["id"],
-            custom_id=response["customId"],
-            name=response["name"],
-            nif=response["code"],
-            email=response["email"],
-            mobile=response["mobile"],
-            phone=response["phone"],
-            type=response["type"],
-            isperson=bool(response["isperson"]),
+            id=response.get("id"),
+            custom_id=response.get("customId"),
+            name=response.get("name", ""),
+            nif=nif,
+            email=response.get("email"),
+            mobile=response.get("mobile"),
+            phone=response.get("phone"),
+            type=response.get("type", "client"),
+            isperson=bool(response.get("isperson", True)),
+            billing_address=into_addr(response.get("billingAddress")),
+            shipping_address=into_addr(response.get("shippingAddress")),
         )
 
     def get_contact_by_id(self, id: str) -> Contact | None:
         try:
-            return self._into_contact(
-                self._call(
-                    "GET",
-                    "/contacts/{}".format(id),
-                )
-            )
-        except IndexError:
+            return self._into_contact(self._call("GET", f"/contacts/{id}"))
+        except Exception:
             return None
 
     def get_contact_by_mobile(self, mobile: str) -> Contact | None:
         try:
             return self._into_contact(self._call("GET", "/contacts", params={"mobile": mobile})[0])
-        except IndexError:
+        except Exception:
             return None
 
     def get_contact_by_custom_id(self, custom_id: str) -> Contact | None:
@@ -270,55 +276,82 @@ class Holded:
             return self._into_contact(
                 self._call("GET", "/contacts", params={"customId": [custom_id]})[0]
             )
-        except IndexError:
+        except Exception:
             return None
 
     def list_contacts(self) -> list[Contact]:
-        return list(map(self._into_contact, self._call("GET", "/contacts")))
+        return [self._into_contact(c) for c in self._call("GET", "/contacts")]
 
-    def create_contact(self, contact: Contact):
-        return self._call(
-            "POST",
-            "/contacts",
-            payload={
-                "CustomId": contact.custom_id,
-                "name": contact.name,
-                "code": contact.nif,
-                "email": contact.email,
-                "mobile": contact.mobile,
-                "phone": contact.phone,
-                "type": contact.type,
-                "isperson": contact.isperson,
-            },
-        )["id"]
+    def _contact_payload(self, c: Contact) -> dict:
+        def compact(d: dict) -> dict:
+            out = {}
+            for k, v in d.items():
+                if v is None or v == "":
+                    continue
+                if isinstance(v, dict):
+                    v = compact(v)
+                    if not v:
+                        continue
+                out[k] = v
+            return out
 
-    def update_contact(self, contact: Contact):
-        return self._call(
-            "PUT",
-            "/contacts/{}".format(contact.id),
-            payload={
-                "name": contact.name,
-                "code": contact.nif,
-                "email": contact.email,
-                "mobile": contact.mobile,
-                "phone": contact.phone,
-                "type": contact.type,
-                "isperson": contact.isperson,
-            },
-        )["id"]
+        payload = {
+            "customId": c.custom_id,
+            "name": c.name,
+            "nif": c.nif,  # <- campo correcto en API moderna
+            "email": (c.email or "").lower() if c.email else None,
+            "mobile": c.mobile,
+            "phone": c.phone,
+            "type": c.type,
+            "isperson": bool(c.isperson),
+        }
+
+        if c.billing_address:
+            payload["billingAddress"] = compact(
+                {
+                    "street": c.billing_address.street,
+                    "city": c.billing_address.city,
+                    "region": c.billing_address.region,
+                    "zip": c.billing_address.zip,
+                    "country": c.billing_address.country,
+                }
+            )
+
+        if c.shipping_address:
+            payload["shippingAddress"] = compact(
+                {
+                    "street": c.shipping_address.street,
+                    "city": c.shipping_address.city,
+                    "region": c.shipping_address.region,
+                    "zip": c.shipping_address.zip,
+                    "country": c.shipping_address.country,
+                }
+            )
+
+        return compact(payload)
+
+    def create_contact(self, contact: Contact) -> str:
+        payload = self._contact_payload(contact)
+        ret = self._call("POST", "/contacts", payload=payload)
+        return ret["id"]
+
+    def update_contact(self, contact: Contact) -> str:
+        assert contact.id, "update_contact requiere contact.id"
+        payload = self._contact_payload(contact)
+        ret = self._call("PUT", f"/contacts/{contact.id}", payload=payload)
+        # algunas versiones devuelven el id, otras no; devolvemos id por coherencia
+        return contact.id
 
     def pay_document(self, type: DocumentType, id: str, payment: Payment):
         return self._call(
             "POST",
-            "/documents/{}/{}/pay".format(type.value, id),
+            f"/documents/{type.value}/{id}/pay",
             payload={
                 "date": int(payment.date.timestamp()),
                 "desc": payment.desc,
-                "amount": payment.amount,
+                "amount": float(payment.amount),
             },
         )
 
     def send_document(self, type: DocumentType, id: str, emails: str):
-        return self._call(
-            "POST", "/documents/{}/{}/send".format(type.value, id), payload={"emails": emails}
-        )
+        return self._call("POST", f"/documents/{type.value}/{id}/send", payload={"emails": emails})
