@@ -282,54 +282,70 @@ class Holded:
     def list_contacts(self) -> list[Contact]:
         return [self._into_contact(c) for c in self._call("GET", "/contacts")]
 
-    def _contact_payload(self, c: Contact) -> dict:
-        def compact(d: dict) -> dict:
-            out = {}
-            for k, v in d.items():
-                if v is None or v == "":
+   def _contact_payload(self, c: Contact) -> dict:
+    def compact(d: dict) -> dict:
+        out = {}
+        for k, v in d.items():
+            if v is None or v == "":
+                continue
+            if isinstance(v, dict):
+                v = compact(v)
+                if not v:
                     continue
-                if isinstance(v, dict):
-                    v = compact(v)
-                    if not v:
-                        continue
-                out[k] = v
-            return out
+            out[k] = v
+        return out
 
-        payload = {
-            "customId": c.custom_id,
-            "name": c.name,
-            "nif": c.nif,
-            "code": c.nif, 
-            "email": (c.email or "").lower() if c.email else None,
-            "mobile": c.mobile,
-            "phone": c.phone,
-            "type": c.type,
-            "isperson": bool(c.isperson),
-        }
+    def addr_to_dict(addr: BillingAddress | None) -> dict:
+        if not addr:
+            return {}
+      
+        country = (addr.country or "").strip().upper() or None
+        return compact({
+            "street": addr.street,
+            "city": addr.city,
+            "region": addr.region,   
+            "zip": addr.zip,
+            "country": country,
+        })
 
-        if c.billing_address:
-            payload["billingAddress"] = compact(
-                {
-                    "street": c.billing_address.street,
-                    "city": c.billing_address.city,
-                    "region": c.billing_address.region,
-                    "zip": c.billing_address.zip,
-                    "country": c.billing_address.country,
-                }
-            )
+    bill = addr_to_dict(c.billing_address)
+    ship = addr_to_dict(c.shipping_address)
 
-        if c.shipping_address:
-            payload["shippingAddress"] = compact(
-                {
-                    "street": c.shipping_address.street,
-                    "city": c.shipping_address.city,
-                    "region": c.shipping_address.region,
-                    "zip": c.shipping_address.zip,
-                    "country": c.shipping_address.country,
-                }
-            )
+    payload = {
+        "customId": c.custom_id,
+        "name": c.name,
+        "nif": c.nif,
+        "code": c.nif,
+        "email": (c.email or "").lower() if c.email else None,
+        "mobile": c.mobile,
+        "phone": c.phone,
+        "type": c.type,
+        "isperson": bool(c.isperson),
+    }
 
-        return compact(payload)
+   
+    if bill:
+        payload["billingAddress"] = bill
+    if ship:
+        payload["shippingAddress"] = ship
+        
+    addresses = []
+    if bill:
+        addresses.append({"type": "billing", **bill})
+    if ship:
+        addresses.append({"type": "shipping", **ship})
+    if addresses:
+        payload["addresses"] = addresses
+
+    payload = compact(payload)
+
+    # LOG útil para depurar (quitar si molesta)
+    try:
+        logger.debug("Holded payload contact => %s", payload)
+    except Exception:
+        pass
+
+    return payload
 
     def create_contact(self, contact: Contact) -> str:
         payload = self._contact_payload(contact)
