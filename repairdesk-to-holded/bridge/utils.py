@@ -135,7 +135,7 @@ def append_warning(
 def convert_customer(customer: repairdesk.Customer) -> holded.Contact:
     full_name = (customer.full_name or "").strip()
 
-    # --- NIF robusto ---
+    # NIF robusto
     def _norm_nif(v):
         if not v:
             return None
@@ -146,18 +146,41 @@ def convert_customer(customer: repairdesk.Customer) -> holded.Contact:
     if full_name == "CLIENTE SIN ALTA":
         nif = None
 
-    # Email / móvil
     email = (getattr(customer, "email", "") or "").strip().lower() or None
     mobile = (
         (getattr(customer, "mobile", "") or "").strip()
         or (getattr(customer, "phone", "") or "").strip()
         or None
     )
-
     isperson = not CONFIG["customer_group_is_business"][customer.customer_group_id]
 
-    # Contacto base
-    contact = holded.Contact(
+    # Direcciones planas desde RD
+    street = (getattr(customer, "address", None) or "").strip() or None
+    city = (getattr(customer, "city", None) or "").strip() or None
+    region = (getattr(customer, "state", None) or "").strip() or None
+    zipcode = (getattr(customer, "zip", None) or "").strip() or None
+    country = (getattr(customer, "country", None) or "").strip() or "ES"
+
+    # Heurísticas: deducir CP/ciudad si faltan
+    if not zipcode and street:
+        import re
+        m = re.search(r"(\d{5})\b", street)
+        if m:
+            zipcode = m.group(1)
+    if not city and street:
+        parts = [p.strip() for p in street.split(",") if p.strip()]
+        if len(parts) >= 2:
+            city = parts[-2]
+
+    bill = holded.BillingAddress(
+        street=street, city=city, region=region, zip=zipcode, country=country
+    )
+    # Si no hay envío específico en RD, clona facturación
+    ship = holded.BillingAddress(
+        street=street, city=city, region=region, zip=zipcode, country=country
+    )
+
+    return holded.Contact(
         id=None,
         custom_id=customer.id,
         name=full_name,
@@ -167,102 +190,9 @@ def convert_customer(customer: repairdesk.Customer) -> holded.Contact:
         nif=nif,
         type="client",
         isperson=isperson,
+        billing_address=bill,
+        shipping_address=ship,
     )
-
-    # ---- Dirección desde RD (billing/shipping si existieran) ----
-    billing = getattr(customer, "billing_address", None) or {}
-    shipping = getattr(customer, "shipping_address", None) or {}
-
-    def _get(obj, key):
-        if hasattr(obj, key):
-            return getattr(obj, key)
-        if isinstance(obj, dict):
-            return obj.get(key)
-        return None
-
-    street = (
-        (getattr(customer, "address", None) or "").strip()
-        or (str(_get(billing, "address") or "").strip())
-        or (str(_get(shipping, "address") or "").strip())
-        or None
-    )
-    city = (
-        (getattr(customer, "city", None) or "").strip()
-        or (str(_get(billing, "city") or "").strip())
-        or (str(_get(shipping, "city") or "").strip())
-        or None
-    )
-    province = (
-        (getattr(customer, "state", None) or "").strip()
-        or (str(_get(billing, "state") or "").strip())
-        or (str(_get(shipping, "state") or "").strip())
-        or None
-    )
-    zipcode = (
-        (getattr(customer, "zip", None) or "").strip()
-        or (str(_get(billing, "zip") or "").strip())
-        or (str(_get(shipping, "zip") or "").strip())
-        or None
-    )
-    country = (
-        (getattr(customer, "country", None) or "").strip()
-        or (str(_get(billing, "country") or "").strip())
-        or (str(_get(shipping, "country") or "").strip())
-        or None
-    )
-
-    # --- Heurísticas: deducir ZIP y ciudad del texto si faltan ---
-    if not zipcode and street:
-        import re
-        m = re.search(r"(\d{5})\b", street)
-        if m:
-            zipcode = m.group(1)
-
-    if not city and street:
-        # Intenta coger la penúltima parte antes del tramo con CP
-        parts = [p.strip() for p in street.split(",") if p.strip()]
-        if len(parts) >= 2:
-            city = parts[-2]
-
-    # --- Construye objetos de dirección (billing/shipping) ---
-    addr_billing = {
-        "type": "billing",
-        "street": street,
-        "city": city,
-        "province": province,
-        "zip": zipcode,
-        "country": country or "ES",
-    }
-    addr_billing = {k: v for k, v in addr_billing.items() if v}
-
-    # Si no tenemos shipping específico, clonamos billing para shipping
-    addr_shipping = dict(addr_billing)
-    addr_shipping["type"] = "shipping"
-
-    # 1) Listas (si el SDK las expone)
-    if hasattr(contact, "addresses") and addr_billing:
-        contact.addresses = [addr_billing]
-    if hasattr(contact, "shipping_addresses") and addr_shipping:
-        contact.shipping_addresses = [addr_shipping]
-
-    # 2) Campos planos (siempre, para que la UI de Holded los muestre)
-    if hasattr(contact, "address"):      contact.address = street
-    if hasattr(contact, "city"):         contact.city = city
-    if hasattr(contact, "province"):     contact.province = province
-    if hasattr(contact, "zipcode"):      contact.zipcode = zipcode
-    if hasattr(contact, "postal_code"):  contact.postal_code = zipcode
-    if hasattr(contact, "country"):      contact.country = country or "ES"
-
-    # 3) Campos planos de envío (si el modelo los tiene)
-    if hasattr(contact, "shipping_address"):     contact.shipping_address = street
-    if hasattr(contact, "shipping_city"):        contact.shipping_city = city
-    if hasattr(contact, "shipping_province"):    contact.shipping_province = province
-    if hasattr(contact, "shipping_zipcode"):     contact.shipping_zipcode = zipcode
-    if hasattr(contact, "shipping_postal_code"): contact.shipping_postal_code = zipcode
-    if hasattr(contact, "shipping_country"):     contact.shipping_country = country or "ES"
-
-    return contact
-
 
 def convert_document(
     type: holded.DocumentType, rd_invoice: repairdesk.Invoice, hd_contact: holded.Contact
