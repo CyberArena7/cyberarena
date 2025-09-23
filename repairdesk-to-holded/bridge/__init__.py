@@ -1,4 +1,5 @@
 import logging
+import dataclasses
 from decimal import Decimal
 import itertools
 import threading
@@ -38,67 +39,72 @@ CLOSED_STATUS_LIST = list(
 )
 
 
-def _addr_tuple(c):
-
+def _addr_tuple(addr) -> tuple:
+    if not addr:
+        return (None, None, None, None, None)
     return (
-        getattr(c, "address", None) or getattr(c, "street", None),
-        getattr(c, "city", None),
-        getattr(c, "province", None) or getattr(c, "state", None),
-        getattr(c, "zipcode", None) or getattr(c, "postal_code", None) or getattr(c, "zip", None),
-        getattr(c, "country", None),
+        getattr(addr, "street", None),
+        getattr(addr, "city", None),
+        getattr(addr, "region", None),
+        getattr(addr, "zip", None),
+        getattr(addr, "country", None),
     )
 
-
-def _ship_addr_tuple(c):
-    return (
-        getattr(c, "shipping_address", None) or getattr(c, "shipping_street", None),
-        getattr(c, "shipping_city", None),
-        getattr(c, "shipping_province", None) or getattr(c, "shipping_state", None),
-        getattr(c, "shipping_zipcode", None)
-        or getattr(c, "shipping_postal_code", None)
-        or getattr(c, "shipping_zip", None),
-        getattr(c, "shipping_country", None),
-    )
+def _strip_addr_fields(c: holded.Contact):
+    # si Holded rechazara la dirección, reintentamos sin ella
+    for fld in ("billing_address", "shipping_address"):
+        if hasattr(c, fld):
+            try:
+                setattr(c, fld, None)
+            except Exception:
+                pass
 
 def _sync_contact(contact: holded.Contact) -> holded.Contact:
     found = None
 
-   
     if contact.custom_id is not None:
         found = hd.get_contact_by_custom_id(contact.custom_id)
-    if found is None and contact.mobile is not None:
+    if found is None and getattr(contact, "mobile", None):
         found = hd.get_contact_by_mobile(contact.mobile)
 
-    if found is not None:
-        
+    if found:
         need_update = (
             (contact.name or "") != (found.name or "")
             or (contact.nif or "") != (found.nif or "")
             or (contact.email or "") != (found.email or "")
             or (contact.mobile or "") != (found.mobile or "")
-            or bool(contact.isperson) != bool(getattr(found, "isperson", False))
-            or _addr_tuple(contact) != _addr_tuple(found)
-            or _ship_addr_tuple(contact) != _ship_addr_tuple(found)
+            or bool(getattr(contact, "isperson", False)) != bool(getattr(found, "isperson", False))
+            or _addr_tuple(getattr(contact, "billing_address", None)) != _addr_tuple(getattr(found, "billing_address", None))
+            or _addr_tuple(getattr(contact, "shipping_address", None)) != _addr_tuple(getattr(found, "shipping_address", None))
         )
-
-        if need_update:
-            logger.info(
-                "Customer %s (id: %s) changed; syncing address/info to Holded",
-                contact.name,
-                contact.custom_id,
-            )
-            contact.id = found.id
-            hd.update_contact(contact)
-            return contact
-        else:
+        if not need_update:
             return found
 
+        logger.info("Customer %s (%s) changed; syncing to Holded", contact.name, contact.custom_id)
+        contact.id = found.id
+        try:
+            hd.update_contact(contact)
+            return contact
+        except Exception as e:
+            logger.warning("Holded rechazó update_contact con dirección (%s). Reintentando sin dirección...", e)
+            safe = dataclasses.replace(contact) if hasattr(dataclasses, "replace") else contact
+            _strip_addr_fields(safe)
+            hd.update_contact(safe)
+            return safe
 
-    logging.info("Creating new customer %s (id: %s)", contact.name, contact.id)
-    new_id = hd.create_contact(contact=contact)
-    found = hd.get_contact_by_id(new_id)
-    assert found is not None
-    return found
+    # Crear nuevo
+    logging.info("Creating new customer %s (id: %s)", contact.name, getattr(contact, "id", None))
+    try:
+        new_id = hd.create_contact(contact=contact)
+    except Exception as e:
+        logger.warning("Holded rechazó create_contact con dirección (%s). Reintentando sin dirección...", e)
+        safe = dataclasses.replace(contact) if hasattr(dataclasses, "replace") else contact
+        _strip_addr_fields(safe)
+        new_id = hd.create_contact(contact=safe)
+
+    created = hd.get_contact_by_id(new_id)
+    assert created is not None
+    return created
 
 # Creates or updates an invoice as needed
 def _sync_invoice(rd_invoice: repairdesk.Invoice):
