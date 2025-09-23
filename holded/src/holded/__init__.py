@@ -298,7 +298,8 @@ class Holded:
         payload = {
             "customId": c.custom_id,
             "name": c.name,
-            "nif": c.nif,  # <- campo correcto en API moderna
+            "nif": c.nif,
+            "code": c.nif, 
             "email": (c.email or "").lower() if c.email else None,
             "mobile": c.mobile,
             "phone": c.phone,
