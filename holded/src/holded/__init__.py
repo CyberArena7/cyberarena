@@ -281,8 +281,8 @@ class Holded:
 
     def list_contacts(self) -> list[Contact]:
         return [self._into_contact(c) for c in self._call("GET", "/contacts")]
-
-   def _contact_payload(self, c: Contact) -> dict:
+        
+def _contact_payload(self, c: Contact) -> dict:
     def compact(d: dict) -> dict:
         out = {}
         for k, v in d.items():
@@ -298,18 +298,17 @@ class Holded:
     def addr_to_dict(addr: BillingAddress | None) -> dict:
         if not addr:
             return {}
-      
+        # Normaliza país a ISO-2 (mayúsculas)
         country = (addr.country or "").strip().upper() or None
         return compact({
             "street": addr.street,
             "city": addr.city,
-            "region": addr.region,   
+            "region": addr.region,   # provincia/estado (API: "region")
             "zip": addr.zip,
             "country": country,
         })
 
     bill = addr_to_dict(c.billing_address)
-    ship = addr_to_dict(c.shipping_address)
 
     payload = {
         "customId": c.custom_id,
@@ -323,21 +322,10 @@ class Holded:
         "isperson": bool(c.isperson),
     }
 
-   
     if bill:
         payload["billingAddress"] = bill
-    if ship:
-        payload["shippingAddress"] = ship
-        
-    addresses = []
-    if bill:
-        addresses.append({"type": "billing", **bill})
-    if ship:
-        addresses.append({"type": "shipping", **ship})
-    if addresses:
-        payload["addresses"] = addresses
 
-    payload = compact(payload)
+    return compact(payload)
 
     # LOG útil para depurar (quitar si molesta)
     try:
