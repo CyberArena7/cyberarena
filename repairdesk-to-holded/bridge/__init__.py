@@ -108,20 +108,27 @@ def _sync_contact(contact: holded.Contact) -> holded.Contact:
 
 # Creates or updates an invoice as needed
 def _sync_invoice(rd_invoice: repairdesk.Invoice):
-    logger.debug("Syncing invoice {}".format(rd_invoice.order_id))
+    TOL = Decimal("0.01")  # tolerancia de 1 céntimo
+    logger.debug("Syncing invoice %s", rd_invoice.order_id)
     rebu = False
 
-    # Sanity checks
-    # Sum of item prices is not equal to invoice total (usually payments will later mismatch)
-    if abs(sum(map(lambda i: i.total, rd_invoice.items)) - rd_invoice.total) > Decimal("0.001"):
+    # --- Sanity checks ---
+    # 1) Suma de líneas vs total
+    suma_lineas = sum(map(lambda i: i.total, rd_invoice.items))
+    if abs(suma_lineas - rd_invoice.total) > TOL:
         append_warning(
-            message="failed sanity check: sum of item prices is not equal to invoice total price",
+            message=(
+                "failed sanity check: sum(items) != total "
+                f"(items={suma_lineas}, total={rd_invoice.total})"
+            ),
             rd_invoice_id=str(rd_invoice.id),
             order_id=rd_invoice.order_id,
             hd_invoice_id=None,
         )
+        logger.warning("Invoice %s descartada por sum(items) != total", rd_invoice.order_id)
         return
-    # Invoice with Bienes Usados tax must not contain general IVA items
+
+    # 2) REBU: si hay clase usados, no puede haber otras con precio != 0
     if CONFIG["used_goods_tax_class"] in map(lambda i: i.tax_class, rd_invoice.items):
         for item in rd_invoice.items:
             if item.total != Decimal(0) and item.tax_class != CONFIG["used_goods_tax_class"]:
@@ -131,8 +138,168 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                     order_id=rd_invoice.order_id,
                     hd_invoice_id=None,
                 )
+                logger.warning("Invoice %s descartada por mixto REBU", rd_invoice.order_id)
                 return
         rebu = True
+
+    # 3) Walk-in no permitidos
+    if int(rd_invoice.customer.id) == 0:
+        append_warning(
+            message="failed sanity check: walkin customer invoices are not allowed",
+            rd_invoice_id=str(rd_invoice.id),
+            order_id=rd_invoice.order_id,
+            hd_invoice_id=None,
+        )
+        logger.warning("Invoice %s descartada por walk-in", rd_invoice.order_id)
+        return
+
+    # --- Contacto ---
+    hd_contact = _sync_contact(convert_customer(rd_invoice.customer))
+    if hd_contact is None or getattr(hd_contact, "id", None) is None:
+        append_warning(
+            message="failed: could not sync or find Holded contact",
+            rd_invoice_id=str(rd_invoice.id),
+            order_id=rd_invoice.order_id,
+            hd_invoice_id=None,
+        )
+        logger.error("Invoice %s: contacto no disponible en Holded", rd_invoice.order_id)
+        return
+
+    # --- Buscar documento existente por número/cliente ---
+    found = find_holded_invoice_by_number(hd, hd_contact, rd_invoice.order_id)
+
+    # --- Decidir si crear como borrador ---
+    if rd_invoice.ticket is not None:
+        draft = False
+        for device in rd_invoice.ticket.devices:
+            if device.status not in CLOSED_STATUS_LIST:
+                draft = True
+                break
+    else:
+        draft = not rebu  # sin ticket: si no es REBU, aprobada; si es REBU, borrador
+
+    converted_hd_invoice = convert_document(holded.DocumentType.INVOICE, rd_invoice, hd_contact)
+
+    # --- Ya existe: comprobar cambios ---
+    if found is not None:
+        logger.debug("\tHolded invoice encontrada, id: %s", found.id)
+        mismatch = False
+        reason = ""
+
+        # Precio total
+        if abs(rd_invoice.total - found.total) > TOL:
+            reason = f"total mismatch RD:{rd_invoice.total} HD:{found.total}"
+            mismatch = True
+            logger.debug("Invoice %s %s", rd_invoice.order_id, reason)
+        else:
+            # Comparación por líneas con tolerancia
+            for rd_item, hd_item in itertools.zip_longest(rd_invoice.items, found.items):
+                if rd_item is None or hd_item is None:
+                    missing = rd_item.name if rd_item is not None else hd_item.name
+                    reason = f"missing item {missing}"
+                    mismatch = True
+                    logger.debug("\tMissing item: %s", missing)
+                    break
+
+                assert rd_item.price is not None
+                assert rd_item.tax is not None
+
+                rd_unit = (rd_item.total / rd_item.quantity)
+                hd_unit = (hd_item.subtotal * (1 + hd_item.tax_percentage / 100))
+                if abs(rd_unit - hd_unit) > TOL:
+                    reason = f"item price mismatch {rd_item.name}; RD:{rd_unit} HD:{hd_unit}"
+                    mismatch = True
+                    logger.debug("\tPrice mismatch item %s", rd_item.name)
+                    break
+
+        if mismatch:
+            logger.info("Invoice %s desincronizada: %s (se recrea)", rd_invoice.order_id, reason)
+            try:
+                hd.delete_document(found)
+                new_id = hd.create_document(converted_hd_invoice, draft=draft)
+                for payment in converted_hd_invoice.payments:
+                    hd.pay_document(converted_hd_invoice.type, new_id, payment)
+                if draft is False and CONFIG.get("send_email", False):
+                    assert type(converted_hd_invoice.buyer) is holded.Contact
+                    send_to = converted_hd_invoice.buyer.email
+                    if send_to:
+                        hd.send_document(converted_hd_invoice.type, new_id, send_to)
+            except holded.ApiError as e:
+                append_warning(
+                    order_id=rd_invoice.order_id,
+                    hd_invoice_id=found.id,
+                    rd_invoice_id=str(rd_invoice.id),
+                    message="approved document is mismatched",
+                )
+        else:
+            # Sin cambios: sincronizar pagos con tolerancia
+            for rd_payment, hd_payment in itertools.zip_longest(
+                sorted(rd_invoice.payments, key=lambda p: p.date),
+                sorted(found.payments, key=lambda p: p.date),
+            ):
+                if hd_payment is None:
+                    hd.pay_document(found.type, found.id, convert_payment(rd_payment))
+                    logger.info("Payed %s for invoice %s", rd_payment.amount, found.number)
+                elif rd_payment is None:
+                    append_warning(
+                        order_id=rd_invoice.order_id,
+                        rd_invoice_id=str(rd_invoice.id),
+                        hd_invoice_id=found.id,
+                        message="missing payments in RepairDesk (payments deleted?)",
+                    )
+                elif abs(rd_payment.amount - hd_payment.amount) > TOL:
+                    append_warning(
+                        order_id=rd_invoice.order_id,
+                        rd_invoice_id=str(rd_invoice.id),
+                        hd_invoice_id=found.id,
+                        message="mismatched payment amount between Holded and RepairDesk",
+                    )
+
+    # --- No existe: crear (aprobada o borrador) ---
+    else:
+        try:
+            if draft is False:
+                id = hd.create_document(converted_hd_invoice, draft=False)
+                logger.info("Created invoice %s (approved)", rd_invoice.order_id)
+                for payment in converted_hd_invoice.payments:
+                    hd.pay_document(converted_hd_invoice.type, id, payment)
+                    logger.info("Payed invoice %s amount %s", rd_invoice.order_id, payment.amount)
+                if CONFIG.get("send_email", False):
+                    assert type(converted_hd_invoice.buyer) is holded.Contact
+                    send_to = converted_hd_invoice.buyer.email
+                    if send_to:
+                        hd.send_document(converted_hd_invoice.type, id, send_to)
+            else:
+                # ⚠️ Antes aquí NO se creaba nada si no estaba cerrado → ahora sí creamos BORRADOR
+                id = hd.create_document(converted_hd_invoice, draft=True)
+                logger.info("Created DRAFT invoice %s", rd_invoice.order_id)
+                for payment in converted_hd_invoice.payments:
+                    hd.pay_document(converted_hd_invoice.type, id, payment)
+                    logger.info("Payed draft invoice %s amount %s", rd_invoice.order_id, payment.amount)
+                if rebu:
+                    append_warning(
+                        message="REBU invoice (created as draft)",
+                        rd_invoice_id=str(rd_invoice.id),
+                        order_id=rd_invoice.order_id,
+                        hd_invoice_id=id,
+                    )
+                else:
+                    if rd_invoice.ticket is not None and \
+                       (datetime.now() - rd_invoice.ticket.created_date) > timedelta(days=30):
+                        append_warning(
+                            message="associated ticket > 30 days (draft created)",
+                            hd_invoice_id=id,
+                            rd_invoice_id=str(rd_invoice.id),
+                            order_id=rd_invoice.order_id,
+                        )
+        except holded.ApiError as e:
+            logger.error("Error creando documento en Holded: %s", e)
+            append_warning(
+                message=f"Holded API error while creating document: {e}",
+                rd_invoice_id=str(rd_invoice.id),
+                order_id=rd_invoice.order_id,
+                hd_invoice_id=None,
+            )
     # Walkin customer invoices are not allowed
     if int(rd_invoice.customer.id) == 0:
         append_warning(
