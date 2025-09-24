@@ -474,31 +474,39 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
 
 def sync_new_invoices(exit_event: threading.Event):
     logger.debug("Syncing new invoices")
-    invoices = hd.list_documents(
-        type=holded.DocumentType.INVOICE, sort=holded.DocumentSort.CREATED_DESCENDING
-    )
 
-    last_invoice = sorted(
-        filter(lambda i: i.status != holded.DocumentStatus.CANCELED, invoices),
-        # Kind of a hacky solution, but eh
-        key=lambda d: from_numbering_series(d.number if d.number is not None else "0"),
-        reverse=True,
-    )[0]
+    try:
+        invoices_hd = hd.list_documents(
+            type=holded.DocumentType.INVOICE,
+            sort=holded.DocumentSort.CREATED_DESCENDING,
+        )
+    except Exception as e:
+        logger.error("Error listando facturas en Holded: %s", e)
+        invoices_hd = []
 
-    # NOTE / Unfun fact: Holded floors dates to start of the day,
-    # so we must set the page size to a sufficiently large number
+    # Si no hay facturas en Holded, nos vamos 90 días atrás
+    if not invoices_hd:
+        from_dt = datetime.now() - timedelta(days=90)
+        logger.info("No hay facturas en Holded; se sincroniza desde %s", from_dt)
+    else:
+        last_invoice = sorted(
+            filter(lambda i: i.status != holded.DocumentStatus.CANCELED, invoices_hd),
+            key=lambda d: from_numbering_series(d.number if d.number is not None else "0"),
+            reverse=True,
+        )[0]
+        from_dt = last_invoice.date
+        logger.info("Última factura en Holded fecha=%s número=%s", last_invoice.date, last_invoice.number)
+
+    # Pedimos a RepairDesk desde from_dt hasta ahora (gran página para no perdernos ninguna)
     for invoice in reversed(
-        rd.invoices(from_date=last_invoice.date, to_date=datetime.now(), page_size=10000)
+        rd.invoices(from_date=from_dt, to_date=datetime.now(), page_size=10000)
     ):
         if exit_event.is_set():
             break
-        if int(invoice.order_id) <= from_numbering_series(last_invoice.number):
-            continue
 
-        invoice = rd.invoice_by_id(invoice.id)
-
-        _sync_invoice(invoice)
-
+        # Importante: no filtramos por número aquí; dejamos que find_holded_invoice_by_number evite duplicados
+        inv_full = rd.invoice_by_id(invoice.id)
+        _sync_invoice(inv_full)
 
 # Syncs all invoice in the last `time_before` time
 def sync_last_invoices(exit_event: threading.Event, time_before: timedelta):
