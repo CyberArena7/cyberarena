@@ -283,37 +283,11 @@ class Holded:
         return [self._into_contact(c) for c in self._call("GET", "/contacts")]
         
 def _contact_payload(self, c: Contact) -> dict:
-    def compact(d: dict) -> dict:
-        out = {}
-        for k, v in d.items():
-            if v is None or v == "":
-                continue
-            if isinstance(v, dict):
-                v = compact(v)
-                if not v:
-                    continue
-            out[k] = v
-        return out
 
-    def addr_to_dict(addr: BillingAddress | None) -> dict:
-        if not addr:
-            return {}
-        # Normaliza país a ISO-2 (mayúsculas)
-        country = (addr.country or "").strip().upper() or None
-        return compact({
-            "street": addr.street,
-            "city": addr.city,
-            "region": addr.region,   # provincia/estado
-            "zip": addr.zip,
-            "country": country,
-        })
-
-    bill = addr_to_dict(c.billing_address)
-
-    # Payload base
     payload = {
         "customId": c.custom_id,
         "name": c.name,
+       
         "nif": c.nif,
         "code": c.nif,
         "email": (c.email or "").lower() if c.email else None,
@@ -322,21 +296,9 @@ def _contact_payload(self, c: Contact) -> dict:
         "type": c.type,
         "isperson": bool(c.isperson),
     }
-
-    # Formato clásico: addresses[]
-    if bill:
-        payload["addresses"] = [{"type": "billing", **bill}]
-
-    return compact(payload)
-
-    # LOG útil para depurar (quitar si molesta)
-    try:
-        logger.debug("Holded payload contact => %s", payload)
-    except Exception:
-        pass
-
-    return payload
-
+ 
+    return {k: v for k, v in payload.items() if v not in (None, "", [])}
+    
     def create_contact(self, contact: Contact) -> str:
         payload = self._contact_payload(contact)
         ret = self._call("POST", "/contacts", payload=payload)
