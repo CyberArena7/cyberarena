@@ -19,7 +19,6 @@ from .utils import (
     convert_payment,
 )
 
-
 HOLDED_API_KEY = os.environ["HOLDED_API_KEY"]
 REPAIRDESK_API_KEY = os.environ["REPAIRDESK_API_KEY"]
 CONFIG = json.load(open("/etc/repairdesk-to-holded.conf.json"))
@@ -29,7 +28,6 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 logger.addHandler(logging.FileHandler("/tmp/logs.txt"))
 
-
 rd = RepairDesk(REPAIRDESK_API_KEY)
 hd = Holded(HOLDED_API_KEY)
 
@@ -38,7 +36,7 @@ CLOSED_STATUS_LIST = list(
     map(lambda s: s.name, filter(lambda s: s.type == "Closed", rd.ticket_statuses()))
 )
 
-
+# ---------- helpers de dirección para comparar/limpiar ----------
 def _addr_tuple(addr) -> tuple:
     if not addr:
         return (None, None, None, None, None)
@@ -59,9 +57,9 @@ def _strip_addr_fields(c: holded.Contact):
             except Exception:
                 pass
 
+# ---------- sincronía de contacto ----------
 def _sync_contact(contact: holded.Contact) -> holded.Contact:
     found = None
-
     if contact.custom_id is not None:
         found = hd.get_contact_by_custom_id(contact.custom_id)
     if found is None and getattr(contact, "mobile", None):
@@ -106,14 +104,19 @@ def _sync_contact(contact: holded.Contact) -> holded.Contact:
     assert created is not None
     return created
 
-# Creates or updates an invoice as needed
+# ---------- sincronía de facturas ----------
 def _sync_invoice(rd_invoice: repairdesk.Invoice):
-    TOL = Decimal("0.01")  # tolerancia de 1 céntimo
+    """
+    Crea/actualiza la factura y registra pagos.
+    - Tolerancia de 0,01 en comparaciones.
+    - Si RD marca 'PAID' pero Holded deja céntimos pendientes, añadimos un pago
+      de ajuste por el 'pending' exacto (hasta 0,05) para dejarla en Pagado.
+    """
+    TOL = Decimal("0.01")
     logger.debug("Syncing invoice %s", rd_invoice.order_id)
     rebu = False
 
     # --- Sanity checks ---
-    # 1) Suma de líneas vs total
     suma_lineas = sum(map(lambda i: i.total, rd_invoice.items))
     if abs(suma_lineas - rd_invoice.total) > TOL:
         append_warning(
@@ -128,7 +131,6 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
         logger.warning("Invoice %s descartada por sum(items) != total", rd_invoice.order_id)
         return
 
-    # 2) REBU: si hay clase usados, no puede haber otras con precio != 0
     if CONFIG["used_goods_tax_class"] in map(lambda i: i.tax_class, rd_invoice.items):
         for item in rd_invoice.items:
             if item.total != Decimal(0) and item.tax_class != CONFIG["used_goods_tax_class"]:
@@ -142,7 +144,6 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                 return
         rebu = True
 
-    # 3) Walk-in no permitidos
     if int(rd_invoice.customer.id) == 0:
         append_warning(
             message="failed sanity check: walkin customer invoices are not allowed",
@@ -168,37 +169,63 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
     # --- Buscar documento existente por número/cliente ---
     found = find_holded_invoice_by_number(hd, hd_contact, rd_invoice.order_id)
 
-    # --- Decidir si crear como borrador ---
+    # --- ¿Borrador o aprobado? ---
     if rd_invoice.ticket is not None:
-        draft = False
-        for device in rd_invoice.ticket.devices:
-            if device.status not in CLOSED_STATUS_LIST:
-                draft = True
-                break
+        draft = any(d.status not in CLOSED_STATUS_LIST for d in rd_invoice.ticket.devices)
     else:
-        draft = not rebu  # sin ticket: si no es REBU, aprobada; si es REBU, borrador
+        draft = bool(rebu)  # REBU en borrador, resto aprobado
 
     converted_hd_invoice = convert_document(holded.DocumentType.INVOICE, rd_invoice, hd_contact)
 
-    # --- Ya existe: comprobar cambios ---
+    # Helper: paga según RD y corrige céntimos pendientes si RD está pagada
+    def _apply_payments_and_fix(invoice_id: str):
+        # 1) Pagos de RD
+        for payment in converted_hd_invoice.payments:
+            hd.pay_document(converted_hd_invoice.type, invoice_id, payment)
+            logger.info("Payed %s for invoice %s", payment.amount, rd_invoice.order_id)
+
+        # 2) Ajuste de céntimos si RD=PAID y Holded deja resto pequeño
+        try:
+            doc = hd.get_document(converted_hd_invoice.type, invoice_id)
+            pending = (doc.total - doc.paid)
+            # Normalizamos a 2 decimales por seguridad visual
+            pending = (pending.quantize(Decimal("0.01")) if pending is not None else Decimal("0.00"))
+            if rd_invoice.status == repairdesk.InvoiceStatus.PAID and pending > Decimal("0.00"):
+                if pending <= Decimal("0.05"):
+                    fix = holded.Payment(
+                        date=datetime.now(),
+                        desc="Ajuste redondeo (aut)",
+                        amount=pending,
+                    )
+                    hd.pay_document(converted_hd_invoice.type, invoice_id, fix)
+                    logger.info("Applied rounding fix %s to invoice %s", pending, rd_invoice.order_id)
+                else:
+                    append_warning(
+                        order_id=rd_invoice.order_id,
+                        rd_invoice_id=str(rd_invoice.id),
+                        hd_invoice_id=invoice_id,
+                        message=f"pending in Holded is {pending} after RD says PAID",
+                    )
+        except Exception as e:
+            logger.warning("Could not fetch/apply rounding fix for %s: %s", rd_invoice.order_id, e)
+
+    # --- Ya existe: comprobar y sincronizar ---
     if found is not None:
-        logger.debug("\tHolded invoice encontrada, id: %s", found.id)
+        logger.debug("\tHolded invoice found, id: %s", found.id)
         mismatch = False
         reason = ""
 
-        # Precio total
+        # Total
         if abs(rd_invoice.total - found.total) > TOL:
             reason = f"total mismatch RD:{rd_invoice.total} HD:{found.total}"
             mismatch = True
-            logger.debug("Invoice %s %s", rd_invoice.order_id, reason)
         else:
-            # Comparación por líneas con tolerancia
+            # Línea a línea con tolerancia de 0,01
             for rd_item, hd_item in itertools.zip_longest(rd_invoice.items, found.items):
                 if rd_item is None or hd_item is None:
                     missing = rd_item.name if rd_item is not None else hd_item.name
                     reason = f"missing item {missing}"
                     mismatch = True
-                    logger.debug("\tMissing item: %s", missing)
                     break
 
                 assert rd_item.price is not None
@@ -209,22 +236,20 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                 if abs(rd_unit - hd_unit) > TOL:
                     reason = f"item price mismatch {rd_item.name}; RD:{rd_unit} HD:{hd_unit}"
                     mismatch = True
-                    logger.debug("\tPrice mismatch item %s", rd_item.name)
                     break
 
         if mismatch:
-            logger.info("Invoice %s desincronizada: %s (se recrea)", rd_invoice.order_id, reason)
+            logger.info("Invoice %s is unsynced, reason: %s", rd_invoice.order_id, reason)
             try:
                 hd.delete_document(found)
                 new_id = hd.create_document(converted_hd_invoice, draft=draft)
-                for payment in converted_hd_invoice.payments:
-                    hd.pay_document(converted_hd_invoice.type, new_id, payment)
+                _apply_payments_and_fix(new_id)
                 if draft is False and CONFIG.get("send_email", False):
-                    assert type(converted_hd_invoice.buyer) is holded.Contact
+                    assert isinstance(converted_hd_invoice.buyer, holded.Contact)
                     send_to = converted_hd_invoice.buyer.email
                     if send_to:
                         hd.send_document(converted_hd_invoice.type, new_id, send_to)
-            except holded.ApiError as e:
+            except holded.ApiError:
                 append_warning(
                     order_id=rd_invoice.order_id,
                     hd_invoice_id=found.id,
@@ -232,22 +257,22 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                     message="approved document is mismatched",
                 )
         else:
-            # Sin cambios: sincronizar pagos con tolerancia
+            # Sin cambios de líneas: sincronizamos pagos que falten y aplicamos ajuste si procede
             for rd_payment, hd_payment in itertools.zip_longest(
                 sorted(rd_invoice.payments, key=lambda p: p.date),
                 sorted(found.payments, key=lambda p: p.date),
             ):
-                if hd_payment is None:
+                if hd_payment is None and rd_payment is not None:
                     hd.pay_document(found.type, found.id, convert_payment(rd_payment))
                     logger.info("Payed %s for invoice %s", rd_payment.amount, found.number)
-                elif rd_payment is None:
+                elif rd_payment is None and hd_payment is not None:
                     append_warning(
                         order_id=rd_invoice.order_id,
                         rd_invoice_id=str(rd_invoice.id),
                         hd_invoice_id=found.id,
                         message="missing payments in RepairDesk (payments deleted?)",
                     )
-                elif abs(rd_payment.amount - hd_payment.amount) > TOL:
+                elif rd_payment and hd_payment and abs(rd_payment.amount - hd_payment.amount) > TOL:
                     append_warning(
                         order_id=rd_invoice.order_id,
                         rd_invoice_id=str(rd_invoice.id),
@@ -255,43 +280,38 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                         message="mismatched payment amount between Holded and RepairDesk",
                     )
 
-    # --- No existe: crear (aprobada o borrador) ---
+            # Ajuste final
+            _apply_payments_and_fix(found.id)
+
+    # --- No existe: crear (aprobada/borrador) ---
     else:
         try:
-            if draft is False:
-                id = hd.create_document(converted_hd_invoice, draft=False)
-                logger.info("Created invoice %s (approved)", rd_invoice.order_id)
-                for payment in converted_hd_invoice.payments:
-                    hd.pay_document(converted_hd_invoice.type, id, payment)
-                    logger.info("Payed invoice %s amount %s", rd_invoice.order_id, payment.amount)
-                if CONFIG.get("send_email", False):
-                    assert type(converted_hd_invoice.buyer) is holded.Contact
-                    send_to = converted_hd_invoice.buyer.email
-                    if send_to:
-                        hd.send_document(converted_hd_invoice.type, id, send_to)
-            else:
-                # ⚠️ Antes aquí NO se creaba nada si no estaba cerrado → ahora sí creamos BORRADOR
-                id = hd.create_document(converted_hd_invoice, draft=True)
-                logger.info("Created DRAFT invoice %s", rd_invoice.order_id)
-                for payment in converted_hd_invoice.payments:
-                    hd.pay_document(converted_hd_invoice.type, id, payment)
-                    logger.info("Payed draft invoice %s amount %s", rd_invoice.order_id, payment.amount)
-                if rebu:
-                    append_warning(
-                        message="REBU invoice (created as draft)",
-                        rd_invoice_id=str(rd_invoice.id),
-                        order_id=rd_invoice.order_id,
-                        hd_invoice_id=id,
-                    )
-                else:
-                    if rd_invoice.ticket is not None and \
-                       (datetime.now() - rd_invoice.ticket.created_date) > timedelta(days=30):
-                        append_warning(
-                            message="associated ticket > 30 days (draft created)",
-                            hd_invoice_id=id,
-                            rd_invoice_id=str(rd_invoice.id),
-                            order_id=rd_invoice.order_id,
-                        )
+            new_id = hd.create_document(converted_hd_invoice, draft=draft)
+            logger.info("Created %s %s",
+                        "DRAFT" if draft else "invoice",
+                        rd_invoice.order_id)
+            _apply_payments_and_fix(new_id)
+            if draft is False and CONFIG.get("send_email", False):
+                assert isinstance(converted_hd_invoice.buyer, holded.Contact)
+                send_to = converted_hd_invoice.buyer.email
+                if send_to:
+                    hd.send_document(converted_hd_invoice.type, new_id, send_to)
+
+            if draft and rebu:
+                append_warning(
+                    message="REBU invoice (created as draft)",
+                    rd_invoice_id=str(rd_invoice.id),
+                    order_id=rd_invoice.order_id,
+                    hd_invoice_id=new_id,
+                )
+            elif draft and rd_invoice.ticket is not None and \
+                 (datetime.now() - rd_invoice.ticket.created_date) > timedelta(days=30):
+                append_warning(
+                    message="associated ticket > 30 days (draft created)",
+                    hd_invoice_id=new_id,
+                    rd_invoice_id=str(rd_invoice.id),
+                    order_id=rd_invoice.order_id,
+                )
         except holded.ApiError as e:
             logger.error("Error creando documento en Holded: %s", e)
             append_warning(
@@ -300,181 +320,10 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                 order_id=rd_invoice.order_id,
                 hd_invoice_id=None,
             )
-    # Walkin customer invoices are not allowed
-    if int(rd_invoice.customer.id) == 0:
-        append_warning(
-            message="failed sanity check: walkin customer invoices are not allowed",
-            rd_invoice_id=str(rd_invoice.id),
-            order_id=rd_invoice.order_id,
-            hd_invoice_id=None,
-        )
-        return
 
-    hd_contact = _sync_contact(convert_customer(rd_invoice.customer))
-
-    # This is an awful method for finding invoices but there's no better way
-    # timestamp cannot be used as holded returns created timestamp on their end
-    found = find_holded_invoice_by_number(hd, hd_contact, rd_invoice.order_id)
-    # TODO: Check if invoice was not found because of paging or limits (order id is behind current one)
-    # TODO: whether document should be instantly approved or not (no ticket associated)
-
-    if rd_invoice.ticket is not None:
-        draft = False
-        for device in rd_invoice.ticket.devices:
-            if device.status not in CLOSED_STATUS_LIST:
-                draft = True
-                break
-    else:
-        if not rebu:
-            draft = False
-        # REBU invoices must have a seat created manually
-        else:
-            draft = True
-
-    converted_hd_invoice = convert_document(holded.DocumentType.INVOICE, rd_invoice, hd_contact)
-
-    # Invoice already exists (check changes and sync if needed)
-    if found is not None:
-        logger.debug("\tholded invoice found, id: {}".format(found.id))
-        mismatch = False
-        reason = ""
-        if abs(rd_invoice.total - found.total) > Decimal("0.001"):
-            reason = "total prices do not match, RepairDesk: {}, Holded: {}".format(
-                rd_invoice.total, found.total
-            )
-            logger.debug("Invoice {} total price does not match".format(rd_invoice.order_id))
-            mismatch = True
-        else:
-            for rd_item, hd_item in itertools.zip_longest(rd_invoice.items, found.items):
-                if rd_item is None or hd_item is None:
-                    if rd_item is not None:
-                        missing = rd_item.name
-                    else:
-                        missing = hd_item.name
-
-                    reason = "missing item {}".format(missing)
-                    mismatch = True
-                    logger.debug("\tmissing item {}".format(found.number))
-                    break
-
-                # TODO: change types of repairdesk to only have Decimal
-                assert rd_item.price is not None
-                assert rd_item.tax is not None
-
-                # Not checking exactly because imprecisions are very likely to occur
-                if abs(
-                    (rd_item.total / rd_item.quantity)
-                    - (hd_item.subtotal * (1 + hd_item.tax_percentage / 100))
-                ) > Decimal("0.001"):
-                    reason = (
-                        "price mismatch on individual item {}; RepairDesk: {}, Holded: {}".format(
-                            rd_item.name,
-                            rd_item.total / rd_item.quantity,
-                            hd_item.subtotal * (1 + hd_item.tax_percentage / 100),
-                        )
-                    )
-                    mismatch = True
-                    logger.debug("\tprice mismatch {}".format(found.number))
-                    break
-
-        if mismatch:
-            logger.info("Invoice {} is unsynced, reason: {}".format(rd_invoice.order_id, reason))
-            try:
-                hd.delete_document(found)
-                new_id = hd.create_document(converted_hd_invoice, draft=draft)
-                for payment in converted_hd_invoice.payments:
-                    hd.pay_document(converted_hd_invoice.type, new_id, payment)
-                if draft is False and CONFIG["send_email"]:
-                    assert type(converted_hd_invoice.buyer) is holded.Contact
-                    send_to = converted_hd_invoice.buyer.email
-                    if send_to is not None:
-                        hd.send_document(converted_hd_invoice.type, new_id, send_to)
-            except holded.ApiError as e:
-                # TODO: Create rectificative, this requires following the chain of related documents
-                # which is not well defined through API so this is out of scope
-
-                append_warning(
-                    order_id=rd_invoice.order_id,
-                    hd_invoice_id=found.id,
-                    rd_invoice_id=str(rd_invoice.id),
-                    message="approved document is mismatched",
-                )
-        else:
-            # Sync payments
-            for rd_payment, hd_payment in itertools.zip_longest(
-                sorted(rd_invoice.payments, key=lambda p: p.date),
-                sorted(found.payments, key=lambda p: p.date),
-            ):
-                # Missing payments, just need to pay
-                if hd_payment is None:
-                    hd.pay_document(found.type, found.id, convert_payment(rd_payment))
-                    logger.info("Payed {} for invoice {}".format(rd_payment.amount, found.number))
-                # Payment has been deleted from RepairDesk, ask for manual sync
-                elif rd_payment is None:
-                    append_warning(
-                        order_id=rd_invoice.order_id,
-                        rd_invoice_id=str(rd_invoice.id),
-                        hd_invoice_id=found.id,
-                        message="missing payments in RepairDesk (payments deleted?)",
-                    )
-                # Payments do not match, ask for manual sync
-                elif abs(rd_payment.amount - hd_payment.amount) > Decimal("0.001"):
-                    append_warning(
-                        order_id=rd_invoice.order_id,
-                        rd_invoice_id=str(rd_invoice.id),
-                        hd_invoice_id=found.id,
-                        message="mismatched payment amount between Holded and RepairDesk",
-                    )
-
-    # Invoice doesn't exist (create)
-    else:
-        if draft is False:
-            id = hd.create_document(converted_hd_invoice, draft=draft)
-            logger.info("Created invoice {}".format(rd_invoice.order_id))
-
-            for payment in converted_hd_invoice.payments:
-                hd.pay_document(converted_hd_invoice.type, id, payment)
-                logger.info(
-                    "Payed invoice {} with amount {}".format(rd_invoice.order_id, payment.amount)
-                )
-            if CONFIG["send_email"]:
-                assert type(converted_hd_invoice.buyer) is holded.Contact
-                send_to = converted_hd_invoice.buyer.email
-                if send_to is not None:
-                    hd.send_document(converted_hd_invoice.type, id, send_to)
-        else:
-            if rebu:
-                id = hd.create_document(converted_hd_invoice, draft=True)
-                logger.info("Created draft {}".format(rd_invoice.order_id))
-                for payment in converted_hd_invoice.payments:
-                    hd.pay_document(converted_hd_invoice.type, id, payment)
-                    logger.info(
-                        "Payed invoice {} with amount {}".format(
-                            rd_invoice.order_id, payment.amount
-                        )
-                    )
-                append_warning(
-                    message="REBU invoice",
-                    rd_invoice_id=str(rd_invoice.id),
-                    order_id=rd_invoice.order_id,
-                    hd_invoice_id=id,
-                )
-
-            else:
-                assert rd_invoice.ticket is not None
-                if (datetime.now() - rd_invoice.ticket.created_date) > timedelta(days=30):
-                    append_warning(
-                        message="associated ticket is over 1 month old",
-                        hd_invoice_id=None,
-                        rd_invoice_id=str(rd_invoice.id),
-                        order_id=rd_invoice.order_id,
-                    )
-                logger.debug("\thas associated ticket and is not finished, not syncing")
-
-
+# ---------- lotes de sincronización ----------
 def sync_new_invoices(exit_event: threading.Event):
     logger.debug("Syncing new invoices")
-
     try:
         invoices_hd = hd.list_documents(
             type=holded.DocumentType.INVOICE,
@@ -497,34 +346,28 @@ def sync_new_invoices(exit_event: threading.Event):
         from_dt = last_invoice.date
         logger.info("Última factura en Holded fecha=%s número=%s", last_invoice.date, last_invoice.number)
 
-    # Pedimos a RepairDesk desde from_dt hasta ahora (gran página para no perdernos ninguna)
+    # Pedimos RD desde from_dt hasta ahora
     for invoice in reversed(
         rd.invoices(from_date=from_dt, to_date=datetime.now(), page_size=10000)
     ):
         if exit_event.is_set():
             break
-
-        # Importante: no filtramos por número aquí; dejamos que find_holded_invoice_by_number evite duplicados
         inv_full = rd.invoice_by_id(invoice.id)
         _sync_invoice(inv_full)
 
-# Syncs all invoice in the last `time_before` time
 def sync_last_invoices(exit_event: threading.Event, time_before: timedelta):
     from_date = max(
-        datetime.fromtimestamp(CONFIG["only_sync_later_than"])
-        if "only_sync_later_than" in CONFIG.keys()
-        else datetime.fromtimestamp(0),
+        datetime.fromtimestamp(CONFIG.get("only_sync_later_than", 0)),
         datetime.now() - time_before,
     )
-    logger.debug("Checking invoices up to {}".format(from_date))
+    logger.debug("Checking invoices up to %s", from_date)
 
-    # TODO: do proper paging please...
     invoices = rd.invoices(from_date=from_date, page_size=10000)
-
     for idx, invoice in enumerate(reversed(invoices)):
         if exit_event.is_set():
             logger.warning(
-                "Shutting down in the middle of an invoice check, {}/{}".format(idx, len(invoices))
+                "Shutting down in the middle of an invoice check, %s/%s",
+                idx, len(invoices)
             )
             break
         _sync_invoice(rd.invoice_by_id(invoice.id))
