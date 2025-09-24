@@ -1,8 +1,9 @@
 # Contains functions to convert from RepairDesk types into Holded ones
 
+
 from dataclasses import dataclass
 import dataclasses
-from datetime import timedelta
+from datetime import datetime, timedelta
 import holded
 import repairdesk
 import json
@@ -12,12 +13,16 @@ import logging
 from uuid import uuid4
 from server import Warning
 import os
+import re
 
 logger = logging.getLogger(__name__)
 
 # Importing twice is pretty bad...
 CONFIG = json.load(open("/etc/repairdesk-to-holded.conf.json"))
 
+# ---------------------------------------------------------------------
+# BÚSQUEDAS Y AVISOS
+# ---------------------------------------------------------------------
 
 # Paginates using timestamps to get all invoices
 def find_holded_invoice_by_number(
@@ -131,6 +136,9 @@ def append_warning(
         with open(CONFIG["data_dir"].rstrip("/") + "/warnings.json", "w") as warn_file:
             json.dump(list(map(dataclasses.asdict, warns)), warn_file)
 
+# ---------------------------------------------------------------------
+# CONVERSORES RD -> HOLDED
+# ---------------------------------------------------------------------
 
 def convert_customer(customer: repairdesk.Customer) -> holded.Contact:
     full_name = (customer.full_name or "").strip()
@@ -163,7 +171,6 @@ def convert_customer(customer: repairdesk.Customer) -> holded.Contact:
 
     # Heurísticas: deducir CP/ciudad si faltan
     if not zipcode and street:
-        import re
         m = re.search(r"(\d{5})\b", street)
         if m:
             zipcode = m.group(1)
@@ -229,7 +236,6 @@ def from_numbering_series(id: str) -> int:
 def convert_tax_class(id: str | None) -> str | None:
     if id == 0 or id is None:
         return None
-
     return CONFIG["tax_classes"][str(id)]
 
 
@@ -255,52 +261,82 @@ def convert_payment(payment: repairdesk.Payment) -> holded.Payment:
         date=payment.date, desc=payment.method + "\n\n" + payment.notes, amount=payment.amount
     )
 
-import logging
-from datetime import datetime
-from decimal import Decimal
+# ---------------------------------------------------------------------
+# HELPERS: CREAR DOCUMENTO Y CERRARLO CON PAGOS
+# ---------------------------------------------------------------------
 
-logger = logging.getLogger(__name__)
+def _safe_decimal(x) -> Decimal:
+    try:
+        return Decimal(x)
+    except Exception:
+        return Decimal("0")
 
-def _apply_payments_strict(hd, doc_type, doc_id: str, payments: list):
-   
-    if not payments:
-        logger.debug("No hay pagos que aplicar en el documento %s", doc_id)
-        return
 
-    for p in payments:
-        # Validaciones mínimas
-        if getattr(p, "amount", None) is None:
-            logger.warning("Pago sin amount, se ignora: %s", p)
-            continue
-        if Decimal(p.amount) == Decimal("0"):
-            logger.debug("Pago de 0, se ignora: %s", p.amount)
-            continue
-        if not isinstance(getattr(p, "date", None), datetime):
-            logger.debug("Pago sin fecha datetime válida, se intenta igualmente: %s", p.date)
+def _apply_payments_then_close(hd, doc_type, doc_id: str, rd_payments: list, rd_total: Decimal, tol: Decimal = Decimal("0.02")):
+    """
+    Aplica todos los pagos de RD y, si la suma no llega al total de RD,
+    registra un pago 'de ajuste' por la diferencia para que Holded quede Pagada.
+    """
+    total_rd = _safe_decimal(rd_total)
+    suma = Decimal("0")
 
-        # Sin tolerancias: importes tal cual
-        logger.info("Aplicando pago EXACTO %s al documento %s", p.amount, doc_id)
-        hd.pay_document(doc_type, doc_id, p)
+    # 1) aplicar pagos que vengan de RD
+    for p in rd_payments or []:
+        try:
+            amount = _safe_decimal(getattr(p, "amount", 0))
+            if amount.copy_abs() <= tol:
+                logger.debug("Pago ~0 ignorado: %s", amount)
+                continue
+            fecha = getattr(p, "date", None)
+            logger.info("Aplicando pago RD %s al doc %s", amount, doc_id)
+            hd.pay_document(doc_type, doc_id, p)
+            suma += amount
+        except Exception as e:
+            logger.warning("Pago RD no aplicado (%s): %s", getattr(p, "amount", None), e)
 
-def create_document_and_apply_payments_strict(hd, document, draft: bool = False, send_email: bool = False):
-  
-    assert getattr(document, "buyer", None) is not None, "document.buyer requerido"
-    assert getattr(document.buyer, "id", None) is not None, "document.buyer.id requerido"
+    # 2) si no llega al total RD, pagar la diferencia
+    diferencia = (total_rd - suma).quantize(Decimal("0.01"))
+    if diferencia > tol:
+        try:
+            logger.info(
+                "Registrando pago de ajuste %s para cerrar doc %s (RD total=%s, sum pagos=%s)",
+                diferencia, doc_id, total_rd, suma
+            )
+            ajuste = holded.Payment(date=datetime.now(), desc="Ajuste sincronización", amount=diferencia)
+            hd.pay_document(doc_type, doc_id, ajuste)
+        except Exception as e:
+            logger.warning("No se pudo registrar el pago de ajuste %s en el doc %s: %s", diferencia, doc_id, e)
 
-    logger.debug("Creando documento en Holded (draft=%s) order=%s",
-                 draft, getattr(document, "number", None))
+
+def create_document_and_close_with_rd_payments(hd, document, rd_total: Decimal, draft: bool = False, send_email: bool = False):
+    """
+    Crea el documento en Holded y lo cierra con los pagos de RD.
+    Si la suma de pagos no alcanza rd_total, añade un pago de ajuste.
+    Devuelve el id del documento creado.
+    """
+    assert getattr(document, "buyer", None) is not None and getattr(document.buyer, "id", None), \
+        "document.buyer.id requerido"
+
+    logger.debug("Creando documento en Holded (draft=%s) para order %s", draft, getattr(document, "number", None))
     doc_id = hd.create_document(document, draft=draft)
 
-    _apply_payments_strict(hd, document.type, doc_id, getattr(document, "payments", []))
+    # Aplica pagos y cierra
+    _apply_payments_then_close(
+        hd,
+        document.type,
+        doc_id,
+        getattr(document, "payments", []),
+        rd_total=rd_total,
+    )
 
-    try:
-        if (not draft) and send_email:
-            buyer = document.buyer
-            send_to = getattr(buyer, "email", None)
-            if send_to:
-                logger.info("Enviando documento %s por email a %s", doc_id, send_to)
-                hd.send_document(document.type, doc_id, send_to)
-    except Exception as e:
-        logger.warning("Fallo enviando documento %s por email: %s", doc_id, e)
+    # Enviar por email si procede y NO es borrador
+    if (not draft) and send_email:
+        try:
+            buyer_email = getattr(document.buyer, "email", None)
+            if buyer_email:
+                logger.info("Enviando documento %s por email a %s", doc_id, buyer_email)
+                hd.send_document(document.type, doc_id, buyer_email)
+        except Exception as e:
+            logger.warning("Fallo enviando documento %s por email: %s", doc_id, e)
 
     return doc_id
