@@ -283,11 +283,10 @@ class Holded:
         return [self._into_contact(c) for c in self._call("GET", "/contacts")]
         
 def _contact_payload(self, c: Contact) -> dict:
-
+ 
     payload = {
         "customId": c.custom_id,
         "name": c.name,
-       
         "nif": c.nif,
         "code": c.nif,
         "email": (c.email or "").lower() if c.email else None,
@@ -296,7 +295,6 @@ def _contact_payload(self, c: Contact) -> dict:
         "type": c.type,
         "isperson": bool(c.isperson),
     }
- 
     return {k: v for k, v in payload.items() if v not in (None, "", [])}
     
     def create_contact(self, contact: Contact) -> str:
