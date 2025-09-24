@@ -109,8 +109,9 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
     """
     Crea/actualiza la factura y registra pagos.
     - Tolerancia de 0,01 en comparaciones.
-    - Si RD marca 'PAID' pero Holded deja céntimos pendientes, añadimos un pago
-      de ajuste por el 'pending' exacto (hasta 0,05) para dejarla en Pagado.
+    - Si RD marca 'PAID' pero los pagos de RD no alcanzan el total por céntimos,
+      añadimos un pago de ajuste por la diferencia exacta (hasta 0,05) para
+      dejarla en Pagado en Holded.
     """
     TOL = Decimal("0.01")
     logger.debug("Syncing invoice %s", rd_invoice.order_id)
@@ -177,37 +178,35 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
 
     converted_hd_invoice = convert_document(holded.DocumentType.INVOICE, rd_invoice, hd_contact)
 
-    # Helper: paga según RD y corrige céntimos pendientes si RD está pagada
-    def _apply_payments_and_fix(invoice_id: str):
-        # 1) Pagos de RD
+    # Helper: pagar según RD y, si RD=PAID, cerrar por diferencia exacta RD
+    def _apply_payments_and_fix_with_rd(invoice_id: str):
+        # 1) Pagos de RD (exactos, sin tolerancia)
         for payment in converted_hd_invoice.payments:
             hd.pay_document(converted_hd_invoice.type, invoice_id, payment)
             logger.info("Payed %s for invoice %s", payment.amount, rd_invoice.order_id)
 
-        # 2) Ajuste de céntimos si RD=PAID y Holded deja resto pequeño
-        try:
-            doc = hd.get_document(converted_hd_invoice.type, invoice_id)
-            pending = (doc.total - doc.paid)
-            # Normalizamos a 2 decimales por seguridad visual
-            pending = (pending.quantize(Decimal("0.01")) if pending is not None else Decimal("0.00"))
-            if rd_invoice.status == repairdesk.InvoiceStatus.PAID and pending > Decimal("0.00"):
-                if pending <= Decimal("0.05"):
+        # 2) Si RD está pagada pero la suma de pagos RD no alcanza el total RD por céntimos,
+        #    añadimos un pago de ajuste de la diferencia exacta (máx 0,05 €)
+        if rd_invoice.status == repairdesk.InvoiceStatus.PAID:
+            total_rd = rd_invoice.total
+            paid_rd = sum((p.amount for p in converted_hd_invoice.payments), Decimal("0"))
+            diff = (total_rd - paid_rd).quantize(Decimal("0.01"))
+            if diff > Decimal("0.00"):
+                if diff <= Decimal("0.05"):
                     fix = holded.Payment(
                         date=datetime.now(),
-                        desc="Ajuste redondeo (aut)",
-                        amount=pending,
+                        desc="Ajuste redondeo (auto)",
+                        amount=diff,
                     )
                     hd.pay_document(converted_hd_invoice.type, invoice_id, fix)
-                    logger.info("Applied rounding fix %s to invoice %s", pending, rd_invoice.order_id)
+                    logger.info("Applied RD rounding fix %s to invoice %s", diff, rd_invoice.order_id)
                 else:
                     append_warning(
                         order_id=rd_invoice.order_id,
                         rd_invoice_id=str(rd_invoice.id),
                         hd_invoice_id=invoice_id,
-                        message=f"pending in Holded is {pending} after RD says PAID",
+                        message=f"RD says PAID but RD payments miss {diff} (>0.05)",
                     )
-        except Exception as e:
-            logger.warning("Could not fetch/apply rounding fix for %s: %s", rd_invoice.order_id, e)
 
     # --- Ya existe: comprobar y sincronizar ---
     if found is not None:
@@ -243,7 +242,7 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
             try:
                 hd.delete_document(found)
                 new_id = hd.create_document(converted_hd_invoice, draft=draft)
-                _apply_payments_and_fix(new_id)
+                _apply_payments_and_fix_with_rd(new_id)
                 if draft is False and CONFIG.get("send_email", False):
                     assert isinstance(converted_hd_invoice.buyer, holded.Contact)
                     send_to = converted_hd_invoice.buyer.email
@@ -280,8 +279,8 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                         message="mismatched payment amount between Holded and RepairDesk",
                     )
 
-            # Ajuste final
-            _apply_payments_and_fix(found.id)
+            # Ajuste final con datos RD
+            _apply_payments_and_fix_with_rd(found.id)
 
     # --- No existe: crear (aprobada/borrador) ---
     else:
@@ -290,7 +289,7 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
             logger.info("Created %s %s",
                         "DRAFT" if draft else "invoice",
                         rd_invoice.order_id)
-            _apply_payments_and_fix(new_id)
+            _apply_payments_and_fix_with_rd(new_id)
             if draft is False and CONFIG.get("send_email", False):
                 assert isinstance(converted_hd_invoice.buyer, holded.Contact)
                 send_to = converted_hd_invoice.buyer.email
