@@ -194,6 +194,7 @@ def convert_customer(customer: repairdesk.Customer) -> holded.Contact:
         shipping_address=ship,
     )
 
+
 def convert_document(
     type: holded.DocumentType, rd_invoice: repairdesk.Invoice, hd_contact: holded.Contact
 ) -> holded.Document:
@@ -253,3 +254,53 @@ def convert_payment(payment: repairdesk.Payment) -> holded.Payment:
     return holded.Payment(
         date=payment.date, desc=payment.method + "\n\n" + payment.notes, amount=payment.amount
     )
+
+import logging
+from datetime import datetime
+from decimal import Decimal
+
+logger = logging.getLogger(__name__)
+
+def _apply_payments_strict(hd, doc_type, doc_id: str, payments: list):
+   
+    if not payments:
+        logger.debug("No hay pagos que aplicar en el documento %s", doc_id)
+        return
+
+    for p in payments:
+        # Validaciones mínimas
+        if getattr(p, "amount", None) is None:
+            logger.warning("Pago sin amount, se ignora: %s", p)
+            continue
+        if Decimal(p.amount) == Decimal("0"):
+            logger.debug("Pago de 0, se ignora: %s", p.amount)
+            continue
+        if not isinstance(getattr(p, "date", None), datetime):
+            logger.debug("Pago sin fecha datetime válida, se intenta igualmente: %s", p.date)
+
+        # Sin tolerancias: importes tal cual
+        logger.info("Aplicando pago EXACTO %s al documento %s", p.amount, doc_id)
+        hd.pay_document(doc_type, doc_id, p)
+
+def create_document_and_apply_payments_strict(hd, document, draft: bool = False, send_email: bool = False):
+  
+    assert getattr(document, "buyer", None) is not None, "document.buyer requerido"
+    assert getattr(document.buyer, "id", None) is not None, "document.buyer.id requerido"
+
+    logger.debug("Creando documento en Holded (draft=%s) order=%s",
+                 draft, getattr(document, "number", None))
+    doc_id = hd.create_document(document, draft=draft)
+
+    _apply_payments_strict(hd, document.type, doc_id, getattr(document, "payments", []))
+
+    try:
+        if (not draft) and send_email:
+            buyer = document.buyer
+            send_to = getattr(buyer, "email", None)
+            if send_to:
+                logger.info("Enviando documento %s por email a %s", doc_id, send_to)
+                hd.send_document(document.type, doc_id, send_to)
+    except Exception as e:
+        logger.warning("Fallo enviando documento %s por email: %s", doc_id, e)
+
+    return doc_id
