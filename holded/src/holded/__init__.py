@@ -118,9 +118,6 @@ class Holded:
             raise ApiError(body.get("info", "no info associated"))
         return body
 
-    # -------------------------------
-    # DOCUMENTS
-    # -------------------------------
     def list_documents(
         self,
         type: DocumentType,
@@ -181,6 +178,60 @@ class Holded:
             for i in ret
         ]
 
+   # --- NUEVO: convertir un dict en Document, reutilizado por get_document ---
+    def _into_document_from_dict(self, type: DocumentType, i: dict) -> Document:
+        return Document(
+            type=type,
+            id=i["id"],
+            number=i["docNumber"],
+            status=DocumentStatus(i["status"]),
+            date=datetime.fromtimestamp(i["date"]),
+            buyer=i["contact"],
+            items=list(
+                map(
+                    lambda p: Item(
+                        name=p["name"],
+                        desc=p.get("desc"),
+                        units=p["units"],
+                        taxes=p.get("taxes", []),
+                        subtotal=Decimal(str(p["price"])),
+                        discount=Decimal(str(p.get("discount", 0))),
+                        tax_percentage=Decimal(str(p.get("tax", 0))),
+                    ),
+                    i.get("products", []),
+                )
+            ),
+            tags=i.get("tags", []),
+            custom_fields=None,
+            numbering_series_id=None,
+            notes=i.get("notes"),
+            payments=list(
+                map(
+                    lambda p: Payment(
+                        date=datetime.fromtimestamp(p["date"]),
+                        amount=Decimal(str(p["amount"])),
+                        desc=None,
+                    ),
+                    i.get("paymentsDetail", []),
+                )
+            ),
+            total=Decimal(str(i.get("total", "0"))),
+            paid=Decimal(str(i.get("paymentsTotal", "0"))),
+            pending=Decimal(str(i.get("paymentsPending", "0"))),
+        )
+
+    # --- NUEVO: leer un documento por ID para conocer pendientes/total/paid ---
+    def get_document(self, type: DocumentType, id: str) -> Document:
+        raw = self._call("GET", f"/documents/{type.value}/{id}")
+        # La API a veces devuelve un dict “plano” del documento
+        if isinstance(raw, dict):
+            return self._into_document_from_dict(type, raw)
+        # Otras veces, envuelve el documento en una lista
+        elif isinstance(raw, list) and raw:
+            return self._into_document_from_dict(type, raw[0])
+        else:
+            raise ApiError(f"Documento {type.value}/{id} no encontrado")
+    
     def create_document(self, document: Document, draft: bool = True) -> str:
         payload = {
             "language": "es",
@@ -210,9 +261,6 @@ class Holded:
         ret = self._call("POST", f"/documents/{document.type.value}", payload=payload)
         return ret["id"]
 
-    # -------------------------------
-    # CONTACTS
-    # -------------------------------
     def _contact_payload(self, c: Contact) -> dict:
         payload = {
             "customId": c.custom_id,
