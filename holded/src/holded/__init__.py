@@ -1,13 +1,12 @@
 from dataclasses import dataclass
 from enum import Enum
 import logging
-from typing import Any, Optional, Dict
+from typing import Any
 import requests
 from datetime import datetime
 from time import sleep
 from decimal import Decimal
 
-# Docs: https://developers.holded.com/reference
 BASE_URL = "https://api.holded.com/api/invoicing/v1"
 
 logger = logging.getLogger(__name__)
@@ -20,34 +19,22 @@ class ApiError(Exception):
 
 
 @dataclass
-class BillingAddress:
-    street: Optional[str] = None
-    city: Optional[str] = None
-    region: Optional[str] = None     
-    zip: Optional[str] = None
-    country: Optional[str] = None     
-
-
-@dataclass
 class Contact:
-    id: Optional[str]
-    custom_id: Optional[str]
+    id: str | None
+    custom_id: str | None
     name: str
-    nif: Optional[str]
-    email: Optional[str]
-    phone: Optional[str]
-    mobile: Optional[str]
+    nif: str | None
+    email: str | None
+    phone: str | None
+    mobile: str | None
     type: str
     isperson: bool
-    # NUEVO: direcciones nativas de Holded
-    billing_address: Optional[BillingAddress] = None
-    shipping_address: Optional[BillingAddress] = None
 
 
 @dataclass
 class Item:
     name: str
-    desc: Optional[str]
+    desc: str | None
     units: int
     subtotal: Decimal
     discount: Decimal
@@ -75,27 +62,27 @@ class DocumentStatus(Enum):
 @dataclass
 class Payment:
     date: datetime
-    desc: Optional[str]
+    desc: str | None
     amount: Decimal
 
 
 @dataclass
 class Document:
     type: DocumentType
-    id: Optional[str]
-    number: Optional[str]
-    status: Optional[DocumentStatus]
+    id: str | None
+    number: str
+    status: DocumentStatus | None
     date: datetime
     buyer: Contact | str
     items: list[Item]
-    custom_fields: Optional[dict[str, str]]
+    custom_fields: dict[str, str] | None
     tags: list[str]
-    notes: Optional[str]
-    numbering_series_id: Optional[str]
+    notes: str | None
+    numbering_series_id: str | None
     payments: list[Payment]
-    total: Optional[Decimal]
-    paid: Optional[Decimal]
-    pending: Optional[Decimal]
+    total: Decimal | None
+    paid: Decimal | None
+    pending: Decimal | None
 
 
 @dataclass(frozen=True)
@@ -106,11 +93,10 @@ class Holded:
         self,
         method: str,
         endpoint: str,
-        params: Optional[dict[str, Any]] = None,
-        payload: Optional[dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
+        payload: dict[str, Any] | None = None,
     ) -> dict | list:
         try:
-            logger.debug("%s %s", method, endpoint)
             ret = requests.request(
                 method,
                 BASE_URL + endpoint,
@@ -121,20 +107,20 @@ class Holded:
                 },
                 json=payload,
                 params=params,
-                timeout=30,
             )
             body = ret.json()
         except Exception as e:
-            logger.error("Error on request %s %s: %s", method, endpoint, e)
-            sleep(5)
+            logger.error("Error on request %s", e)
+            sleep(10)
             return self._call(method=method, endpoint=endpoint, params=params, payload=payload)
 
-        # API moderna: cuando hay "status" y != 1, es error
-        if isinstance(body, dict) and body.get("status") not in (None, 1):
-            raise ApiError(body.get("info", "Holded API error"))
+        if type(body) is dict and "status" in body.keys() and body["status"] != 1:
+            raise ApiError(body.get("info", "no info associated"))
         return body
 
-
+    # -------------------------------
+    # DOCUMENTS
+    # -------------------------------
     def list_documents(
         self,
         type: DocumentType,
@@ -148,33 +134,33 @@ class Holded:
             "GET",
             f"/documents/{type.value}",
             params={
-                "starttmp": int(start.timestamp()) if start is not None else None,
-                "endtmp": int(end.timestamp()) if end is not None else None,
+                "starttmp": start.timestamp() if start else None,
+                "endtmp": end.timestamp() if end else None,
                 "contactId": contact_id,
-                "sort": sort.value if sort is not None else None,
-                "paid": paid.value if paid is not None else None,
+                "sort": sort.value if sort else None,
+                "paid": paid.value if paid else None,
             },
         )
 
         return [
             Document(
                 type=type,
-                id=i.get("id"),
-                number=i.get("docNumber"),
-                status=DocumentStatus(i["status"]) if "status" in i else None,
+                id=i["id"],
+                number=i["docNumber"],
+                status=DocumentStatus(i["status"]),
                 date=datetime.fromtimestamp(i["date"]),
                 buyer=i["contact"],
                 items=[
                     Item(
                         name=p["name"],
-                        desc=p.get("desc"),
+                        desc=p["desc"],
                         units=p["units"],
-                        taxes=p.get("taxes", []),
-                        subtotal=Decimal(str(p["price"])),
-                        discount=Decimal(str(p.get("discount", 0))),
-                        tax_percentage=Decimal(str(p.get("tax", 0))),
+                        taxes=p["taxes"],
+                        subtotal=Decimal(p["price"]),
+                        discount=Decimal(p["discount"]),
+                        tax_percentage=Decimal(p["tax"]),
                     )
-                    for p in i.get("products", [])
+                    for p in i["products"]
                 ],
                 tags=i.get("tags", []),
                 custom_fields=None,
@@ -183,20 +169,19 @@ class Holded:
                 payments=[
                     Payment(
                         date=datetime.fromtimestamp(p["date"]),
-                        amount=Decimal(str(p["amount"])),
+                        amount=Decimal(p["amount"]),
                         desc=None,
                     )
                     for p in i.get("paymentsDetail", [])
                 ],
-                total=Decimal(str(i["total"])) if "total" in i else None,
-                paid=Decimal(str(i.get("paymentsTotal", 0))),
-                pending=Decimal(str(i.get("paymentsPending", 0))),
+                total=Decimal(i["total"]),
+                paid=Decimal(i["paymentsTotal"]),
+                pending=Decimal(i["paymentsPending"]),
             )
             for i in ret
         ]
 
     def create_document(self, document: Document, draft: bool = True) -> str:
-        assert isinstance(document.buyer, Contact) and document.buyer.id, "buyer.id requerido"
         payload = {
             "language": "es",
             "contactId": document.buyer.id,
@@ -221,42 +206,51 @@ class Holded:
             "notes": document.notes,
             "approveDoc": not draft,
         }
+        logger.debug("Payload factura => %s", payload)
         ret = self._call("POST", f"/documents/{document.type.value}", payload=payload)
         return ret["id"]
 
-    def delete_document(self, document: Document):
-        assert document.id is not None
-        self._call("DELETE", f"/documents/{document.type.value}/{document.id}")
+    # -------------------------------
+    # CONTACTS
+    # -------------------------------
+    def _contact_payload(self, c: Contact) -> dict:
+        payload = {
+            "customId": c.custom_id,
+            "name": c.name,
+            "nif": c.nif,
+            "code": c.nif,
+            "email": (c.email or "").lower() if c.email else None,
+            "mobile": c.mobile,
+            "phone": c.phone,
+            "type": c.type,
+            "isperson": bool(c.isperson),
+        }
 
- 
+        # ⚠️ Importante: payload mínimo, sin direcciones de momento
+        # Así garantizamos que no falle la creación
+        return {k: v for k, v in payload.items() if v not in (None, "")}
 
-    def _into_contact(self, response: dict[str, Any]) -> Contact:
-       
-        nif = response.get("nif", response.get("code"))
-      
-        def into_addr(obj: Optional[Dict[str, Any]]) -> Optional[BillingAddress]:
-            if not obj:
-                return None
-            return BillingAddress(
-                street=obj.get("street"),
-                city=obj.get("city"),
-                region=obj.get("region"),
-                zip=obj.get("zip"),
-                country=obj.get("country"),
-            )
+    def create_contact(self, contact: Contact):
+        payload = self._contact_payload(contact)
+        logger.debug("Payload create_contact => %s", payload)
+        return self._call("POST", "/contacts", payload=payload)["id"]
 
+    def update_contact(self, contact: Contact):
+        payload = self._contact_payload(contact)
+        logger.debug("Payload update_contact => %s", payload)
+        return self._call("PUT", f"/contacts/{contact.id}", payload=payload)["id"]
+
+    def _into_contact(self, response: dict[str, Any]):
         return Contact(
             id=response.get("id"),
             custom_id=response.get("customId"),
-            name=response.get("name", ""),
-            nif=nif,
+            name=response.get("name"),
+            nif=response.get("code"),
             email=response.get("email"),
             mobile=response.get("mobile"),
             phone=response.get("phone"),
-            type=response.get("type", "client"),
-            isperson=bool(response.get("isperson", True)),
-            billing_address=into_addr(response.get("billingAddress")),
-            shipping_address=into_addr(response.get("shippingAddress")),
+            type=response.get("type"),
+            isperson=bool(response.get("isperson")),
         )
 
     def get_contact_by_id(self, id: str) -> Contact | None:
@@ -281,44 +275,4 @@ class Holded:
 
     def list_contacts(self) -> list[Contact]:
         return [self._into_contact(c) for c in self._call("GET", "/contacts")]
-        
-def _contact_payload(self, c: Contact) -> dict:
- 
-    payload = {
-        "customId": c.custom_id,
-        "name": c.name,
-        "nif": c.nif,
-        "code": c.nif,
-        "email": (c.email or "").lower() if c.email else None,
-        "mobile": c.mobile,
-        "phone": c.phone,
-        "type": c.type,
-        "isperson": bool(c.isperson),
-    }
-    return {k: v for k, v in payload.items() if v not in (None, "", [])}
-    
-    def create_contact(self, contact: Contact) -> str:
-        payload = self._contact_payload(contact)
-        ret = self._call("POST", "/contacts", payload=payload)
-        return ret["id"]
 
-    def update_contact(self, contact: Contact) -> str:
-        assert contact.id, "update_contact requiere contact.id"
-        payload = self._contact_payload(contact)
-        ret = self._call("PUT", f"/contacts/{contact.id}", payload=payload)
-        # algunas versiones devuelven el id, otras no; devolvemos id por coherencia
-        return contact.id
-
-    def pay_document(self, type: DocumentType, id: str, payment: Payment):
-        return self._call(
-            "POST",
-            f"/documents/{type.value}/{id}/pay",
-            payload={
-                "date": int(payment.date.timestamp()),
-                "desc": payment.desc,
-                "amount": float(payment.amount),
-            },
-        )
-
-    def send_document(self, type: DocumentType, id: str, emails: str):
-        return self._call("POST", f"/documents/{type.value}/{id}/send", payload={"emails": emails})
