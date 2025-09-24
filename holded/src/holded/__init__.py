@@ -303,13 +303,14 @@ def _contact_payload(self, c: Contact) -> dict:
         return compact({
             "street": addr.street,
             "city": addr.city,
-            "region": addr.region,   # provincia/estado (API: "region")
+            "region": addr.region,   # provincia/estado
             "zip": addr.zip,
             "country": country,
         })
 
     bill = addr_to_dict(c.billing_address)
 
+    # Payload base
     payload = {
         "customId": c.custom_id,
         "name": c.name,
@@ -322,8 +323,9 @@ def _contact_payload(self, c: Contact) -> dict:
         "isperson": bool(c.isperson),
     }
 
+    # Formato clásico: addresses[]
     if bill:
-        payload["billingAddress"] = bill
+        payload["addresses"] = [{"type": "billing", **bill}]
 
     return compact(payload)
 
