@@ -36,6 +36,7 @@ CLOSED_STATUS_LIST = list(
     map(lambda s: s.name, filter(lambda s: s.type == "Closed", rd.ticket_statuses()))
 )
 
+
 # ---------- helpers de dirección para comparar/limpiar ----------
 def _addr_tuple(addr) -> tuple:
     if not addr:
@@ -48,6 +49,7 @@ def _addr_tuple(addr) -> tuple:
         getattr(addr, "country", None),
     )
 
+
 def _strip_addr_fields(c: holded.Contact):
     # si Holded rechazara la dirección, reintentamos sin ella
     for fld in ("billing_address", "shipping_address"):
@@ -57,23 +59,23 @@ def _strip_addr_fields(c: holded.Contact):
             except Exception:
                 pass
 
+
 # ---------- sincronía de contacto ----------
 def _sync_contact(contact: holded.Contact) -> holded.Contact:
     found = None
     if contact.custom_id is not None:
         found = hd.get_contact_by_custom_id(contact.custom_id)
-    if found is None and getattr(contact, "mobile", None):
+    if found is None and contact.mobile is not None:
         found = hd.get_contact_by_mobile(contact.mobile)
 
     if found:
         need_update = (
-            (contact.name or "") != (found.name or "")
-            or (contact.nif or "") != (found.nif or "")
-            or (contact.email or "") != (found.email or "")
-            or (contact.mobile or "") != (found.mobile or "")
-            or bool(getattr(contact, "isperson", False)) != bool(getattr(found, "isperson", False))
-            or _addr_tuple(getattr(contact, "billing_address", None)) != _addr_tuple(getattr(found, "billing_address", None))
-            or _addr_tuple(getattr(contact, "shipping_address", None)) != _addr_tuple(getattr(found, "shipping_address", None))
+            contact.name != found.name
+            or contact.nif != found.nif
+            or contact.email != found.email
+            or contact.mobile != found.mobile
+            or contact.isperson != found.isperson
+            or contact.billAddress != found.billAddress
         )
         if not need_update:
             return found
@@ -84,7 +86,9 @@ def _sync_contact(contact: holded.Contact) -> holded.Contact:
             hd.update_contact(contact)
             return contact
         except Exception as e:
-            logger.warning("Holded rechazó update_contact con dirección (%s). Reintentando sin dirección...", e)
+            logger.warning(
+                "Holded rechazó update_contact con dirección (%s). Reintentando sin dirección...", e
+            )
             safe = dataclasses.replace(contact) if hasattr(dataclasses, "replace") else contact
             _strip_addr_fields(safe)
             hd.update_contact(safe)
@@ -95,7 +99,9 @@ def _sync_contact(contact: holded.Contact) -> holded.Contact:
     try:
         new_id = hd.create_contact(contact=contact)
     except Exception as e:
-        logger.warning("Holded rechazó create_contact con dirección (%s). Reintentando sin dirección...", e)
+        logger.warning(
+            "Holded rechazó create_contact con dirección (%s). Reintentando sin dirección...", e
+        )
         safe = dataclasses.replace(contact) if hasattr(dataclasses, "replace") else contact
         _strip_addr_fields(safe)
         new_id = hd.create_contact(contact=safe)
@@ -103,6 +109,7 @@ def _sync_contact(contact: holded.Contact) -> holded.Contact:
     created = hd.get_contact_by_id(new_id)
     assert created is not None
     return created
+
 
 # ---------- sincronía de facturas ----------
 def _sync_invoice(rd_invoice: repairdesk.Invoice):
@@ -199,7 +206,9 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                         amount=diff,
                     )
                     hd.pay_document(converted_hd_invoice.type, invoice_id, fix)
-                    logger.info("Applied RD rounding fix %s to invoice %s", diff, rd_invoice.order_id)
+                    logger.info(
+                        "Applied RD rounding fix %s to invoice %s", diff, rd_invoice.order_id
+                    )
                 else:
                     append_warning(
                         order_id=rd_invoice.order_id,
@@ -230,8 +239,8 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                 assert rd_item.price is not None
                 assert rd_item.tax is not None
 
-                rd_unit = (rd_item.total / rd_item.quantity)
-                hd_unit = (hd_item.subtotal * (1 + hd_item.tax_percentage / 100))
+                rd_unit = rd_item.total / rd_item.quantity
+                hd_unit = hd_item.subtotal * (1 + hd_item.tax_percentage / 100)
                 if abs(rd_unit - hd_unit) > TOL:
                     reason = f"item price mismatch {rd_item.name}; RD:{rd_unit} HD:{hd_unit}"
                     mismatch = True
@@ -286,9 +295,7 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
     else:
         try:
             new_id = hd.create_document(converted_hd_invoice, draft=draft)
-            logger.info("Created %s %s",
-                        "DRAFT" if draft else "invoice",
-                        rd_invoice.order_id)
+            logger.info("Created %s %s", "DRAFT" if draft else "invoice", rd_invoice.order_id)
             _apply_payments_and_fix_with_rd(new_id)
             if draft is False and CONFIG.get("send_email", False):
                 assert isinstance(converted_hd_invoice.buyer, holded.Contact)
@@ -303,8 +310,11 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                     order_id=rd_invoice.order_id,
                     hd_invoice_id=new_id,
                 )
-            elif draft and rd_invoice.ticket is not None and \
-                 (datetime.now() - rd_invoice.ticket.created_date) > timedelta(days=30):
+            elif (
+                draft
+                and rd_invoice.ticket is not None
+                and (datetime.now() - rd_invoice.ticket.created_date) > timedelta(days=30)
+            ):
                 append_warning(
                     message="associated ticket > 30 days (draft created)",
                     hd_invoice_id=new_id,
@@ -319,6 +329,7 @@ def _sync_invoice(rd_invoice: repairdesk.Invoice):
                 order_id=rd_invoice.order_id,
                 hd_invoice_id=None,
             )
+
 
 # ---------- lotes de sincronización ----------
 def sync_new_invoices(exit_event: threading.Event):
@@ -343,7 +354,9 @@ def sync_new_invoices(exit_event: threading.Event):
             reverse=True,
         )[0]
         from_dt = last_invoice.date
-        logger.info("Última factura en Holded fecha=%s número=%s", last_invoice.date, last_invoice.number)
+        logger.info(
+            "Última factura en Holded fecha=%s número=%s", last_invoice.date, last_invoice.number
+        )
 
     # Pedimos RD desde from_dt hasta ahora
     for invoice in reversed(
@@ -353,6 +366,7 @@ def sync_new_invoices(exit_event: threading.Event):
             break
         inv_full = rd.invoice_by_id(invoice.id)
         _sync_invoice(inv_full)
+
 
 def sync_last_invoices(exit_event: threading.Event, time_before: timedelta):
     from_date = max(
@@ -365,8 +379,7 @@ def sync_last_invoices(exit_event: threading.Event, time_before: timedelta):
     for idx, invoice in enumerate(reversed(invoices)):
         if exit_event.is_set():
             logger.warning(
-                "Shutting down in the middle of an invoice check, %s/%s",
-                idx, len(invoices)
+                "Shutting down in the middle of an invoice check, %s/%s", idx, len(invoices)
             )
             break
         _sync_invoice(rd.invoice_by_id(invoice.id))

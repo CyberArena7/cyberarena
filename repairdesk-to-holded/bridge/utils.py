@@ -24,6 +24,7 @@ CONFIG = json.load(open("/etc/repairdesk-to-holded.conf.json"))
 # BÚSQUEDAS Y AVISOS
 # ---------------------------------------------------------------------
 
+
 # Paginates using timestamps to get all invoices
 def find_holded_invoice_by_number(
     hd: holded.Holded, contact: holded.Contact, number: str
@@ -136,9 +137,11 @@ def append_warning(
         with open(CONFIG["data_dir"].rstrip("/") + "/warnings.json", "w") as warn_file:
             json.dump(list(map(dataclasses.asdict, warns)), warn_file)
 
+
 # ---------------------------------------------------------------------
 # CONVERSORES RD -> HOLDED
 # ---------------------------------------------------------------------
+
 
 def convert_customer(customer: repairdesk.Customer) -> holded.Contact:
     full_name = (customer.full_name or "").strip()
@@ -162,29 +165,12 @@ def convert_customer(customer: repairdesk.Customer) -> holded.Contact:
     )
     isperson = not CONFIG["customer_group_is_business"][customer.customer_group_id]
 
-    # Direcciones planas desde RD
-    street = (getattr(customer, "address", None) or "").strip() or None
-    city = (getattr(customer, "city", None) or "").strip() or None
-    region = (getattr(customer, "state", None) or "").strip() or None
-    zipcode = (getattr(customer, "zip", None) or "").strip() or None
-    country = (getattr(customer, "country", None) or "").strip() or "ES"
-
-    # Heurísticas: deducir CP/ciudad si faltan
-    if not zipcode and street:
-        m = re.search(r"(\d{5})\b", street)
-        if m:
-            zipcode = m.group(1)
-    if not city and street:
-        parts = [p.strip() for p in street.split(",") if p.strip()]
-        if len(parts) >= 2:
-            city = parts[-2]
-
-    bill = holded.BillingAddress(
-        street=street, city=city, region=region, zip=zipcode, country=country
-    )
-    # Si no hay envío específico en RD, clona facturación
-    ship = holded.BillingAddress(
-        street=street, city=city, region=region, zip=zipcode, country=country
+    billingAddress = holded.Address(
+        address=customer.address,
+        city=customer.city,
+        postalCode=customer.postcode,
+        province=customer.state,
+        country=customer.country,
     )
 
     return holded.Contact(
@@ -197,8 +183,7 @@ def convert_customer(customer: repairdesk.Customer) -> holded.Contact:
         nif=nif,
         type="client",
         isperson=isperson,
-        billing_address=bill,
-        shipping_address=ship,
+        billAddress=billingAddress,
     )
 
 
@@ -261,9 +246,11 @@ def convert_payment(payment: repairdesk.Payment) -> holded.Payment:
         date=payment.date, desc=payment.method + "\n\n" + payment.notes, amount=payment.amount
     )
 
+
 # ---------------------------------------------------------------------
 # HELPERS: CREAR DOCUMENTO Y CERRARLO CON PAGOS
 # ---------------------------------------------------------------------
+
 
 def _safe_decimal(x) -> Decimal:
     try:
@@ -272,7 +259,9 @@ def _safe_decimal(x) -> Decimal:
         return Decimal("0")
 
 
-def _apply_payments_then_close(hd, doc_type, doc_id: str, rd_payments: list, rd_total: Decimal, tol: Decimal = Decimal("0.02")):
+def _apply_payments_then_close(
+    hd, doc_type, doc_id: str, rd_payments: list, rd_total: Decimal, tol: Decimal = Decimal("0.02")
+):
     """
     Aplica todos los pagos de RD y, si la suma no llega al total de RD,
     registra un pago 'de ajuste' por la diferencia para que Holded quede Pagada.
@@ -300,24 +289,38 @@ def _apply_payments_then_close(hd, doc_type, doc_id: str, rd_payments: list, rd_
         try:
             logger.info(
                 "Registrando pago de ajuste %s para cerrar doc %s (RD total=%s, sum pagos=%s)",
-                diferencia, doc_id, total_rd, suma
+                diferencia,
+                doc_id,
+                total_rd,
+                suma,
             )
-            ajuste = holded.Payment(date=datetime.now(), desc="Ajuste sincronización", amount=diferencia)
+            ajuste = holded.Payment(
+                date=datetime.now(), desc="Ajuste sincronización", amount=diferencia
+            )
             hd.pay_document(doc_type, doc_id, ajuste)
         except Exception as e:
-            logger.warning("No se pudo registrar el pago de ajuste %s en el doc %s: %s", diferencia, doc_id, e)
+            logger.warning(
+                "No se pudo registrar el pago de ajuste %s en el doc %s: %s", diferencia, doc_id, e
+            )
 
 
-def create_document_and_close_with_rd_payments(hd, document, rd_total: Decimal, draft: bool = False, send_email: bool = False):
+def create_document_and_close_with_rd_payments(
+    hd, document, rd_total: Decimal, draft: bool = False, send_email: bool = False
+):
     """
     Crea el documento en Holded y lo cierra con los pagos de RD.
     Si la suma de pagos no alcanza rd_total, añade un pago de ajuste.
     Devuelve el id del documento creado.
     """
-    assert getattr(document, "buyer", None) is not None and getattr(document.buyer, "id", None), \
+    assert getattr(document, "buyer", None) is not None and getattr(document.buyer, "id", None), (
         "document.buyer.id requerido"
+    )
 
-    logger.debug("Creando documento en Holded (draft=%s) para order %s", draft, getattr(document, "number", None))
+    logger.debug(
+        "Creando documento en Holded (draft=%s) para order %s",
+        draft,
+        getattr(document, "number", None),
+    )
     doc_id = hd.create_document(document, draft=draft)
 
     # Aplica pagos y cierra

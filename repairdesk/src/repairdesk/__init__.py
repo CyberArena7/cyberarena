@@ -56,6 +56,7 @@ class Customer:
     city: str
     state: str
     country: str
+    postcode: str
     nif: str | None
     customer_group_id: str | None
 
@@ -301,6 +302,7 @@ class RepairDesk:
                 id=inv["summary"]["customer"]["cid"],
                 mobile=inv["summary"]["customer"]["mobile"],
                 address=inv["summary"]["customer"]["address1"],
+                postcode=inv["summary"]["customer"]["postcode"],
                 email=inv["summary"]["customer"]["email"],
                 city=inv["summary"]["customer"]["city"],
                 state=inv["summary"]["customer"]["state"],

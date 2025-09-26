@@ -19,6 +19,15 @@ class ApiError(Exception):
 
 
 @dataclass
+class Address:
+    address: str
+    city: str
+    postalCode: str
+    province: str
+    country: str
+
+
+@dataclass
 class Contact:
     id: str | None
     custom_id: str | None
@@ -27,6 +36,7 @@ class Contact:
     email: str | None
     phone: str | None
     mobile: str | None
+    billAddress: Address
     type: str
     isperson: bool
 
@@ -178,7 +188,7 @@ class Holded:
             for i in ret
         ]
 
-   # --- NUEVO: convertir un dict en Document, reutilizado por get_document ---
+    # --- NUEVO: convertir un dict en Document, reutilizado por get_document ---
     def _into_document_from_dict(self, type: DocumentType, i: dict) -> Document:
         return Document(
             type=type,
@@ -231,7 +241,7 @@ class Holded:
             return self._into_document_from_dict(type, raw[0])
         else:
             raise ApiError(f"Documento {type.value}/{id} no encontrado")
-    
+
     def create_document(self, document: Document, draft: bool = True) -> str:
         payload = {
             "language": "es",
@@ -272,6 +282,14 @@ class Holded:
             "phone": c.phone,
             "type": c.type,
             "isperson": bool(c.isperson),
+            # TODO: maybe countryCode is needed? need to make a map in that case
+            "billAddress": {
+                "address": c.billAddress.address,
+                "city": c.billAddress.city,
+                "postalCode": c.billAddress.postalCode,
+                "province": c.billAddress.province,
+                "country": c.billAddress.country,
+            },
         }
 
         # ⚠️ Importante: payload mínimo, sin direcciones de momento
@@ -288,7 +306,16 @@ class Holded:
         logger.debug("Payload update_contact => %s", payload)
         return self._call("PUT", f"/contacts/{contact.id}", payload=payload)["id"]
 
-    def _into_contact(self, response: dict[str, Any]):
+    def _into_address(self, response: dict[str, Any]) -> Address:
+        return Address(
+            address=response["address"],
+            city=response["city"],
+            postalCode=response["postalCode"],
+            province=response["province"],
+            country=response["country"],
+        )
+
+    def _into_contact(self, response: dict[str, Any]) -> Contact:
         return Contact(
             id=response.get("id"),
             custom_id=response.get("customId"),
@@ -296,6 +323,7 @@ class Holded:
             nif=response.get("code"),
             email=response.get("email"),
             mobile=response.get("mobile"),
+            billAddress=self._into_address(response.get("billAddress")),
             phone=response.get("phone"),
             type=response.get("type"),
             isperson=bool(response.get("isperson")),
@@ -323,4 +351,3 @@ class Holded:
 
     def list_contacts(self) -> list[Contact]:
         return [self._into_contact(c) for c in self._call("GET", "/contacts")]
-
